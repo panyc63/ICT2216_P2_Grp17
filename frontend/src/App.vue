@@ -27,10 +27,10 @@ import { useRoute } from 'vue-router'
 
 const route = useRoute()
 
-// Computed conditional flag: Automatically hides the main navigation layout 
-// ONLY when the user is viewing the full screen Admin Dashboard layout console frame.
+// Computed conditional flag: Hides the main navigation layout on full-screen
+// console frames that carry their own navigation (Admin Dashboard, Patient Portal).
 const showNavbar = computed(() => {
-  return route.path !== '/admin-dashboard'
+  return route.path !== '/admin-dashboard' && !route.path.startsWith('/patient')
 })
 </script>
 
