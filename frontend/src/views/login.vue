@@ -54,6 +54,9 @@ const handleLogin = () => {
   if(email.value === 'johndoe@medihealth.com' && password.value === 'uwu'){//love to be lazy
     router.push('/doc-dashboard')
   } 
+    if(email.value === 'clara@medihealth.com' && password.value === 'owo'){
+    router.push('/nurse-dashboard')
+  } 
   else {
     alert(`Invalid credentials! You typed: ${email.value}`)
   }
