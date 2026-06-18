@@ -5,6 +5,8 @@ import Register from '../views/Register.vue'
 import ForgetPassword from '../views/ForgetPassword.vue'
 import HardwareCheck from '../views/HardwareCheck.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
+import DocConsult from '../views/docConsult.vue'
+import DocPrescribe from '../views/docPrescribe.vue'
 
 const routes = [
   { path: '/', name: 'Home', component: Home },
@@ -13,6 +15,8 @@ const routes = [
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
   { path: '/hardware-check', name: 'HardwareCheck', component: HardwareCheck },
   { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard }
+  { path: '/doc-consult', name: 'DocConsult', component: DocConsult }
+  { path: '/doc-prescribe', name: 'DocPrescribe', component: DocPrescribe }
 ]
 
 const router = createRouter({
