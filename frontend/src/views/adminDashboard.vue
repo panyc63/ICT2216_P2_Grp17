@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-slate-50 flex font-sans">
     <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col">
-      <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-8">MediHealth Admin</div>
+      <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-8">MediFlow Admin Dashboard</div>
       <nav class="space-y-1 flex-1">
         <button @click="activeTab = 'staff'" :class="[activeTab === 'staff' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Staff CRUD Management</button>
         <button @click="activeTab = 'consultations'" :class="[activeTab === 'consultations' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Live Consultations</button>
@@ -95,7 +95,7 @@
         <form @submit.prevent="createStaffAccount" class="space-y-4">
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase">Email</label>
-            <input v-model="newStaff.email" type="email" required class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" placeholder="harper@medihealth.com" />
+            <input v-model="newStaff.email" type="email" required class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" placeholder="harper@mediflow.com" />
           </div>
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase">Temporary Password</label>

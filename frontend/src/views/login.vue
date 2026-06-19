@@ -66,9 +66,8 @@ const handleLogin = async () => {
     }
 
     localStorage.setItem('userRole', data.user.role)
-    localStorage.setItem('userId', data.user.user_id) // Keeps track of your exact database ID format (e.g. MH-U001)
+    localStorage.setItem('userId', data.user.user_id) 
 
-    // Perfectly matched to your exact database ENUM capitalization strings:
     if (data.user.role === 'Admin') {
       router.push('/admin-dashboard')
     } else if (data.user.role === 'Doctor') {
@@ -78,7 +77,7 @@ const handleLogin = async () => {
     } else if (data.user.role === 'Pharmacist') {
       router.push('/pharmacist-dashboard')
     } else if (data.user.role === 'Patient') {
-      router.push('/patient-dashboard')
+      router.push('/patient')
     }
 
   } catch (error) {

@@ -3,7 +3,7 @@
     <header class="bg-white border-b border-slate-200 sticky top-0 z-50">
       <div class="max-w-7xl mx-auto px-6 h-20 flex justify-between items-center">
         <div class="text-2xl font-extrabold text-indigo-600 tracking-tight">
-          <router-link to="/">MediHealth</router-link>
+          <router-link to="/">MediFlow</router-link>
         </div>
         <ul class="hidden md:flex gap-8 list-none font-medium text-sm text-slate-600">
           <li><router-link to="/" class="hover:text-indigo-600 transition-colors">Home</router-link></li>

@@ -1,5 +1,5 @@
-CREATE DATABASE IF NOT EXISTS medihealth_db;
-USE medihealth_db;
+CREATE DATABASE IF NOT EXISTS mediflow_db;
+USE mediflow_db;
 
 -- users
 CREATE TABLE IF NOT EXISTS users (
@@ -56,10 +56,10 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 
 INSERT INTO users (user_id, email, password_hash, role, is_verified, last_login) VALUES
-('MH-U001', 'admin@medihealth.com', '1234', 'Admin', TRUE, CURRENT_TIMESTAMP),
-('MH-U002', 'doctor@medihealth.com', '1234', 'Doctor', TRUE, CURRENT_TIMESTAMP),
-('MH-U003', 'nurse@medihealth.com', '1234', 'Nurse', TRUE, CURRENT_TIMESTAMP),
-('MH-U004', 'pharmacy@medihealth.com', '1234', 'Pharmacist', TRUE, CURRENT_TIMESTAMP),
+('MH-U001', 'admin@mediflow.com', '1234', 'Admin', TRUE, CURRENT_TIMESTAMP),
+('MH-U002', 'doctor@mediflow.com', '1234', 'Doctor', TRUE, CURRENT_TIMESTAMP),
+('MH-U003', 'nurse@mediflow.com', '1234', 'Nurse', TRUE, CURRENT_TIMESTAMP),
+('MH-U004', 'pharmacy@mediflow.com', '1234', 'Pharmacist', TRUE, CURRENT_TIMESTAMP),
 ('MH-U005', 'jane@gmail.com', '1234', 'Patient', FALSE, NULL),
 ('MH-U006', 'john@gmail.com', '1234', 'Patient', TRUE, CURRENT_TIMESTAMP);
 

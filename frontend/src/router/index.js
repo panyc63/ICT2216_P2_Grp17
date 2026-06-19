@@ -35,7 +35,7 @@ const routes = [
   { path: '/doc-prescribe', name: 'DocPrescribe', component: DocPrescribe },
   { path: '/nurse-dashboard', name: 'NurseDashboard', component: NurseDashboard },
   { path: '/nurse-queue-view', name: 'NurseQueueView', component: NurseViewQueue },
-  { path: '/nurse-queue-edit', name: 'NurseQueueEdit', component: NurseEditQueue }
+  { path: '/nurse-queue-edit', name: 'NurseQueueEdit', component: NurseEditQueue },
   {
     path: '/patient',
     component: PatientLayout,

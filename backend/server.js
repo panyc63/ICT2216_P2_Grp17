@@ -41,7 +41,7 @@ app.post('/api/register', (req, res) => {
     db.query(maxIdQuery, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
 
-        let nextUserId = 'MH-U001'; 
+        let nextUserId = ''; 
 
         if (results.length > 0) {
             const lastId = results[0].user_id; 
