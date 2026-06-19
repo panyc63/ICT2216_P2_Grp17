@@ -19,23 +19,27 @@ export const patientStore = reactive({
     homeAddress: '123 Bukit Timah Road, #08-21, Singapore 589456'
   },
 
-  // 2. Book Consultation
-  booking: {
-    selectedSlotId: null
-  },
-
-  // 3. Questionnaire
+  // 2. Questionnaire
   questionnaire: {
     answers: {},
     submitted: false
   },
 
-  // 4. Medication Collection
+  // Live consultation queue. Kept in the shared store (not the Queue page) so
+  // it survives tab navigation — the poller in PatientLayout reads/writes this,
+  // which lets the patient browse other tabs and still be pulled into the call.
+  queue: {
+    active: false,   // currently waiting in the queue
+    position: null,
+    total: 0
+  },
+
+  // 3. Medication Collection
   medication: {
     method: 'self-collect' // 'self-collect' | 'delivery'
   },
 
-  // 5. Payment
+  // 4. Payment
   payment: {
     consultationFee: 45.0,
     medicationCost: 28.5,

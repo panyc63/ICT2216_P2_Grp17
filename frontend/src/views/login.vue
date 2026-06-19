@@ -47,14 +47,6 @@ const router = useRouter()
 const email = ref('')       // Must be defined as email
 const password = ref('')
 
-<<<<<<< Updated upstream
-const handleLogin = () => {
-  // Exact match string verification
-  if (email.value === 'admin@medihealth.com' && password.value === 'pass123') {
-    router.push('/admin-dashboard')
-  } else {
-    alert(`Invalid credentials! You typed: ${email.value}`)
-=======
 const handleLogin = async () => {
   try {
     const response = await fetch('http://localhost:5000/api/login', {
@@ -77,7 +69,6 @@ const handleLogin = async () => {
     localStorage.setItem('userRole', data.user.role)
     localStorage.setItem('userId', data.user.user_id)
 
-    // Keep the patient store's identity in sync with the active session.
     patientStore.patientId = data.user.user_id
 
     if (data.user.role === 'Admin') {
@@ -94,7 +85,6 @@ const handleLogin = async () => {
 
   } catch (error) {
     alert(`Login Failed: ${error.message}`)
->>>>>>> Stashed changes
   }
 }
 </script>

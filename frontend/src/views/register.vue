@@ -89,10 +89,6 @@ const name = ref('')
 const email = ref('')
 const password = ref('')
 
-<<<<<<< Updated upstream
-const handleRegister = () => {
-  // Simple success simulation matching original structural redirection flow
-=======
 const handleRegister = async () => {
   try {
     const response = await fetch('http://localhost:5000/api/register', {
@@ -107,16 +103,16 @@ const handleRegister = async () => {
       })
     })
 
-  const data = await response.json()
+    const data = await response.json()
 
-  if (!response.ok) {
-    throw new Error(data.error || 'Register sequence failed.')
+    if (!response.ok) {
+      throw new Error(data.error || 'Register sequence failed.')
+    }
+
+    alert(`Registration successful for ${name.value}! Redirecting to login...`)
+    router.push('/login')
+  } catch (error) {
+    alert(`Registration Failed: ${error.message}`)
   }
-
-  // Registration does not establish a session — only login.vue sets
-  // userId/userRole. The user authenticates explicitly after registering.
->>>>>>> Stashed changes
-  alert(`Registration successful for ${name.value}! Redirecting to login...`)
-  router.push('/login')
 }
 </script>

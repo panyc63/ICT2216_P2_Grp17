@@ -82,10 +82,28 @@ export function useWebRTC() {
       if (event.candidate) push(localCandidates, event.candidate.toJSON())
     }
 
-    // Apply the other peer's ICE candidates.
+    // Remote candidates can (and usually do) arrive before the remote SDP is
+    // applied. Adding a candidate before setRemoteDescription throws, so buffer
+    // them until the description is set, then drain the queue.
+    let remoteDescriptionSet = false
+    const pendingCandidates = []
+
+    const drainPendingCandidates = async () => {
+      while (pendingCandidates.length) {
+        const candidate = pendingCandidates.shift()
+        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {})
+      }
+    }
+
+    // Apply (or buffer) the other peer's ICE candidates.
     listeners.push(onChildAdded(remoteCandidates, (snap) => {
       const candidate = snap.val()
-      if (candidate) pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {})
+      if (!candidate) return
+      if (remoteDescriptionSet) {
+        pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {})
+      } else {
+        pendingCandidates.push(candidate)
+      }
     }))
 
     if (isCaller) {
@@ -98,6 +116,8 @@ export function useWebRTC() {
         const answer = snap.val()
         if (answer && !pc.currentRemoteDescription) {
           await pc.setRemoteDescription(new RTCSessionDescription(answer))
+          remoteDescriptionSet = true
+          await drainPendingCandidates()
         }
       }))
     } else {
@@ -106,6 +126,8 @@ export function useWebRTC() {
         const offer = snap.val()
         if (offer && !pc.currentRemoteDescription) {
           await pc.setRemoteDescription(new RTCSessionDescription(offer))
+          remoteDescriptionSet = true
+          await drainPendingCandidates()
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
           await set(answerRef, { type: answer.type, sdp: answer.sdp })

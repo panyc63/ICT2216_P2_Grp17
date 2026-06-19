@@ -5,21 +5,12 @@ import Register from '../views/Register.vue'
 import ForgetPassword from '../views/ForgetPassword.vue'
 import HardwareCheck from '../views/HardwareCheck.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
-<<<<<<< Updated upstream
-=======
 import DocConsult from '../views/doc/docConsult.vue'
 import DocConsultRoom from '../views/doc/ConsultationRoom.vue'
-import DocPrescribe from '../views/doc/docPrescribe.vue'
-import DocDashboard from '../views/doc/docDashboard.vue'
-import NurseDashboard from '../views/nurse/nurseDashboard.vue'
-import NurseViewQueue from '../views/nurse/nurseViewQueue.vue'
-import NurseEditQueue from '../views/nurse/nurseEditQueue.vue'
->>>>>>> Stashed changes
 
 // Patient-facing prototype views
 import PatientLayout from '../views/patient/PatientLayout.vue'
 import Profile from '../views/patient/Profile.vue'
-import BookConsultation from '../views/patient/BookConsultation.vue'
 import Questionnaire from '../views/patient/Questionnaire.vue'
 import Queue from '../views/patient/Queue.vue'
 import VideoConsultation from '../views/patient/VideoConsultation.vue'
@@ -36,23 +27,14 @@ const routes = [
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
   { path: '/hardware-check', name: 'HardwareCheck', component: HardwareCheck },
   { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard },
-<<<<<<< Updated upstream
-=======
-  { path: '/doc-dashboard', name: 'DocDashboard', component: DocDashboard },
   { path: '/doc-consult', name: 'DocConsult', component: DocConsult },
   { path: '/doc-consult-room', name: 'DocConsultRoom', component: DocConsultRoom },
-  { path: '/doc-prescribe', name: 'DocPrescribe', component: DocPrescribe },
-  { path: '/nurse-dashboard', name: 'NurseDashboard', component: NurseDashboard },
-  { path: '/nurse-queue-view', name: 'NurseQueueView', component: NurseViewQueue },
-  { path: '/nurse-queue-edit', name: 'NurseQueueEdit', component: NurseEditQueue },
->>>>>>> Stashed changes
   {
     path: '/patient',
     component: PatientLayout,
     children: [
       { path: '', redirect: '/patient/profile' },
       { path: 'profile', name: 'PatientProfile', component: Profile },
-      { path: 'book-consultation', name: 'BookConsultation', component: BookConsultation },
       { path: 'questionnaire', name: 'Questionnaire', component: Questionnaire },
       { path: 'queue', name: 'Queue', component: Queue },
       { path: 'video-consultation', name: 'VideoConsultation', component: VideoConsultation },
