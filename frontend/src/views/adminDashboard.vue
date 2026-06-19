@@ -26,15 +26,15 @@
           <table class="min-w-full divide-y divide-slate-200 text-left text-sm">
             <thead class="bg-slate-50 font-semibold text-slate-700">
               <tr>
-                <th class="px-6 py-3">Staff Name</th>
-                <th class="px-6 py-3">Work Email</th>
-                <th class="px-6 py-3">System Role Claim</th>
+                <th class="px-6 py-3">Staff ID</th>
+                <th class="px-6 py-3">Email</th>
+                <th class="px-6 py-3">Role</th>
                 <th class="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-200 text-slate-600">
-              <tr v-for="member in staffList" :key="member.id">
-                <td class="px-6 py-4 font-medium text-slate-900">{{ member.name }}</td>
+              <tr v-for="member in staffList" :key="member.user_id">
+                <td class="px-6 py-4 font-medium text-slate-900">{{ member.user_id }}</td>
                 <td class="px-6 py-4">{{ member.email }}</td>
                 <td class="px-6 py-4">
                   <span :class="member.role === 'Doctor' ? 'bg-blue-50 text-blue-700 ring-blue-700/10' : 'bg-purple-50 text-purple-700 ring-purple-700/10'" class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset">
@@ -42,8 +42,11 @@
                   </span>
                 </td>
                 <td class="px-6 py-4 text-right">
-                  <button @click="deleteStaffAccount(member.id)" class="text-red-600 hover:text-red-900 font-medium">Delete</button>
+                  <button @click="deleteStaffAccount(member.user_id)" class="text-red-600 hover:text-red-900 font-medium">Delete</button>
                 </td>
+              </tr>
+              <tr v-if="staffList.length === 0">
+                <td colspan="4" class="px-6 py-10 text-center text-slate-400 italic">No operational staff records detected in the active database.</td>
               </tr>
             </tbody>
           </table>
@@ -91,18 +94,19 @@
         <h3 class="text-lg font-bold text-slate-900 mb-4">Provision Staff Profile</h3>
         <form @submit.prevent="createStaffAccount" class="space-y-4">
           <div>
-            <label class="block text-xs font-bold text-slate-700 uppercase">Full Name</label>
-            <input v-model="newStaff.name" type="text" required class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" placeholder="Dr. Evelyn Harper" />
+            <label class="block text-xs font-bold text-slate-700 uppercase">Email</label>
+            <input v-model="newStaff.email" type="email" required class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" placeholder="harper@medihealth.com" />
           </div>
           <div>
-            <label class="block text-xs font-bold text-slate-700 uppercase">Work Email</label>
-            <input v-model="newStaff.email" type="email" required class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" placeholder="harper@mediflow.com" />
+            <label class="block text-xs font-bold text-slate-700 uppercase">Temporary Password</label>
+            <input v-model="newStaff.password" type="text" required class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" />
           </div>
           <div>
-            <label class="block text-xs font-bold text-slate-700 uppercase">Role Group assignment</label>
+            <label class="block text-xs font-bold text-slate-700 uppercase">Role</label>
             <select v-model="newStaff.role" class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white">
               <option value="Doctor">Doctor</option>
               <option value="Nurse">Nurse</option>
+              <option value="Pharmacist">Pharmacist</option>
             </select>
           </div>
           <div class="flex justify-end gap-2 pt-2">
@@ -116,50 +120,94 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
 const activeTab = ref('staff')
 const showModal = ref(false)
 
-// Mock Data Pipelines
-const staffList = ref([
-  { id: 1, name: 'Dr. John Doe', email: 'johndoe@medihealth.com', role: 'Doctor' },
-  { id: 2, name: 'Nurse Clara Oswald', email: 'clara@medihealth.com', role: 'Nurse' }
-])
+const staffList = ref([])
+const consultations = ref([])
+const recordings = ref([])
 
-const consultations = ref([
-  { id: 'ROOM-77X', doctor: 'Dr. John Doe', patient: 'Michael Chang', latency: 12 },
-  { id: 'ROOM-42B', doctor: 'Dr. Sarah Lin', patient: 'Emma Watson', latency: 18 }
-])
+const newStaff = ref({ email: '', role: 'Doctor', password: '1234' })
 
-const recordings = ref([
-  { id: 101, fileName: 'REC_CONSULT_ROOM-11A_20260614.mp4', date: '2026-06-14 09:22', size: '142.4 MB' },
-  { id: 102, fileName: 'REC_CONSULT_ROOM-04F_20260615.mp4', date: '2026-06-15 14:45', size: '98.1 MB' }
-])
+const API_URL = 'http://localhost:5000/api'
 
-const newStaff = ref({ name: '', email: '', role: 'Doctor' })
-
-// CRUD Processing Actions
-const createStaffAccount = () => {
-  staffList.value.push({
-    id: Date.now(),
-    name: newStaff.value.name,
-    email: newStaff.value.email,
-    role: newStaff.value.role
-  })
-  // Reset fields and collapse modal view boundary
-  newStaff.value = { name: '', email: '', role: 'Doctor' }
-  showModal.value = false
+const fetchStaffMembers = async () => {
+  try {
+    const response = await fetch(`${API_URL}/staff`)
+    if (!response.ok) throw new Error('Failed to retrieve institutional staff array.')
+    const data = await response.json()
+    staffList.value = data
+  } catch (error) {
+    console.error('Database Sync Error:', error.message)
+  }
 }
 
-const deleteStaffAccount = (id) => {
-  staffList.value = staffList.value.filter(item => item.id !== id)
+onMounted(() => {
+  fetchStaffMembers()
+  
+  consultations.value = [
+    { id: 'ROOM-77X', doctor: 'Dr. Smith', patient: 'John Doe', latency: 12 },
+    { id: 'ROOM-42B', doctor: 'Dr. Smith', patient: 'Jane Smith', latency: 18 }
+  ]
+  recordings.value = [
+    { id: 101, fileName: 'REC_CONSULT_ROOM-11A_20260614.mp4', date: '2026-06-14 09:22', size: '142.4 MB' },
+    { id: 102, fileName: 'REC_CONSULT_ROOM-04F_20260615.mp4', date: '2026-06-15 14:45', size: '98.1 MB' }
+  ]
+})
+
+// Trigger endpoint registration logic
+const createStaffAccount = async () => {
+  try {
+    const response = await fetch(`${API_URL}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: newStaff.value.email,
+        password: newStaff.value.password,
+        role: newStaff.value.role
+      })
+    })
+
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || 'Identity generation fault.')
+
+    alert('Staff account successfully provisioned inside database!')
+    showModal.value = false
+    newStaff.value = { email: '', role: 'Doctor', password: '1234' }
+    
+    // Instantly refresh staff list array
+    await fetchStaffMembers()
+
+  } catch (error) {
+    alert(`Registration Sequence Aborted: ${error.message}`)
+  }
+}
+
+// Issue targeted HTTP Drop instructions
+const deleteStaffAccount = async (userId) => {
+  if (!confirm(`Are you confident you want to delete profile record ${userId}?`)) return
+
+  try {
+    const response = await fetch(`${API_URL}/staff/${userId}`, {
+      method: 'DELETE'
+    })
+
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || 'Server rejected removal sequence.')
+
+    // Update state reactively
+    staffList.value = staffList.value.filter(item => item.user_id !== userId)
+  } catch (error) {
+    alert(`Deletion Fault: ${error.message}`)
+  }
 }
 
 const handleLogout = () => {
   localStorage.clear()
-  router.push('/')
+  router.push('/login')
 }
 </script>

@@ -43,22 +43,46 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
-const email = ref('')       // Must be defined as email
+const email = ref('')
 const password = ref('')
 
-const handleLogin = () => {
-  // Exact match string verification
-  if (email.value === 'admin@medihealth.com' && password.value === 'pass123') {
-    router.push('/admin-dashboard')
-  }
-  if(email.value === 'johndoe@medihealth.com' && password.value === 'uwu'){//love to be lazy
-    router.push('/doc-dashboard')
-  } 
-    if(email.value === 'clara@medihealth.com' && password.value === 'owo'){
-    router.push('/nurse-dashboard')
-  } 
-  else {
-    alert(`Invalid credentials! You typed: ${email.value}`)
+const handleLogin = async () => {
+  try {
+    const response = await fetch('http://localhost:5000/api/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        email: email.value,
+        password: password.value
+      })
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Authentication sequence failed.')
+    }
+
+    localStorage.setItem('userRole', data.user.role)
+    localStorage.setItem('userId', data.user.user_id) // Keeps track of your exact database ID format (e.g. MH-U001)
+
+    // Perfectly matched to your exact database ENUM capitalization strings:
+    if (data.user.role === 'Admin') {
+      router.push('/admin-dashboard')
+    } else if (data.user.role === 'Doctor') {
+      router.push('/doctor-dashboard')
+    } else if (data.user.role === 'Nurse') {
+      router.push('/nurse-dashboard')
+    } else if (data.user.role === 'Pharmacist') {
+      router.push('/pharmacist-dashboard')
+    } else if (data.user.role === 'Patient') {
+      router.push('/patient-dashboard')
+    }
+
+  } catch (error) {
+    alert(`Login Failed: ${error.message}`)
   }
 }
 </script>
