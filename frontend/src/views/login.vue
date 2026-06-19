@@ -72,7 +72,7 @@ const handleLogin = async () => {
     if (data.user.role === 'Admin') {
       router.push('/admin-dashboard')
     } else if (data.user.role === 'Doctor') {
-      router.push('/doctor-dashboard')
+      router.push('/doc-dashboard')
     } else if (data.user.role === 'Nurse') {
       router.push('/nurse-dashboard')
     } else if (data.user.role === 'Pharmacist') {
