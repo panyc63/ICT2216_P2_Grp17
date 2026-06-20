@@ -1,13 +1,20 @@
 <template>
   <div class="min-h-screen bg-slate-50 flex font-sans">
-    <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col">
+    <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col h-screen sticky top-0">
       <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-8">MediHealth Admin</div>
       <nav class="space-y-1 flex-1">
         <button @click="activeTab = 'staff'" :class="[activeTab === 'staff' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Staff CRUD Management</button>
         <button @click="activeTab = 'consultations'" :class="[activeTab === 'consultations' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Live Consultations</button>
         <button @click="activeTab = 'recordings'" :class="[activeTab === 'recordings' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Video Recordings Archive</button>
       </nav>
-      <button @click="handleLogout" class="text-left text-red-400 hover:bg-slate-800 px-4 py-2 rounded-lg font-medium text-sm">Logout</button>
+      <div class="mt-4 pt-4 border-t border-slate-800 space-y-1">
+        <router-link to="/" class="w-full text-left text-slate-300 hover:bg-slate-800 px-4 py-2.5 rounded-lg font-medium text-sm flex items-center gap-2">
+          <span>🌐</span> Home
+        </router-link>
+        <button @click="handleLogout" class="w-full text-left text-red-400 hover:bg-slate-800 px-4 py-2.5 rounded-lg font-semibold text-sm flex items-center gap-2">
+          <span>⏻</span> Logout
+        </button>
+      </div>
     </aside>
 
     <main class="flex-1 p-10">
@@ -118,6 +125,9 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuth } from '../composables/useAuth'
+
+const { clearSession } = useAuth()
 
 const router = useRouter()
 const activeTab = ref('staff')
@@ -159,7 +169,7 @@ const deleteStaffAccount = (id) => {
 }
 
 const handleLogout = () => {
-  localStorage.clear()
+  clearSession()
   router.push('/')
 }
 </script>

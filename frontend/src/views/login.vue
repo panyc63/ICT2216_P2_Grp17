@@ -42,8 +42,10 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { patientStore } from '../store/patientStore'
+import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
+const { setSession, portalPath } = useAuth()
 const email = ref('')       // Must be defined as email
 const password = ref('')
 
@@ -66,22 +68,12 @@ const handleLogin = async () => {
       throw new Error(data.error || 'Authentication sequence failed.')
     }
 
-    localStorage.setItem('userRole', data.user.role)
-    localStorage.setItem('userId', data.user.user_id)
-
+    // Establish the session (writes localStorage + updates reactive auth state).
+    setSession(data.user.user_id, data.user.role)
     patientStore.patientId = data.user.user_id
 
-    if (data.user.role === 'Admin') {
-      router.push('/admin-dashboard')
-    } else if (data.user.role === 'Doctor') {
-      router.push('/doc-dashboard')
-    } else if (data.user.role === 'Nurse') {
-      router.push('/nurse-dashboard')
-    } else if (data.user.role === 'Pharmacist') {
-      router.push('/pharmacist-dashboard')
-    } else if (data.user.role === 'Patient') {
-      router.push('/patient')
-    }
+    // Route to the role's portal (centralized map in useAuth).
+    router.push(portalPath.value)
 
   } catch (error) {
     alert(`Login Failed: ${error.message}`)

@@ -82,10 +82,14 @@ router.post('/accept', async (req, res) => {
 
         const consultationId = await nextConsultationId();
 
+        // Carry the patient's Path A/B declaration from the queue entry onto the
+        // persisted consultation record.
+        const needsMedication = typeof entry.needs_medication === 'boolean' ? entry.needs_medication : null;
+
         // Persist the consultation in MySQL (Stripe/Phase 2 keys off this).
         await dbPromise.query(
-            'INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status) VALUES (?, ?, ?, ?)',
-            [consultationId, entry.patient_id, doctor_id, 'Active']
+            'INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status, needs_medication) VALUES (?, ?, ?, ?, ?)',
+            [consultationId, entry.patient_id, doctor_id, 'Active', needsMedication]
         );
 
         // Stamp the room id onto the patient's queue entry so their status
@@ -99,7 +103,37 @@ router.post('/accept', async (req, res) => {
             room_id: consultationId,
             consultation_id: consultationId,
             patient_id: entry.patient_id,
-            doctor_id
+            doctor_id,
+            needs_medication: needsMedication
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/consultations/active/:patientId — the patient's most recent
+// consultation. Lets the frontend recover the Path A/B branch (needs_medication)
+// after a refresh, since the queue entry is gone once the call completes.
+router.get('/active/:patientId', async (req, res) => {
+    const { patientId } = req.params;
+
+    try {
+        const [rows] = await dbPromise.query(
+            'SELECT consultation_id, doctor_id, session_status, needs_medication FROM consultations WHERE patient_id = ? ORDER BY consultation_id DESC LIMIT 1',
+            [patientId]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'No consultation found for this patient.' });
+        }
+
+        // MySQL returns TINYINT (0/1/null) for BOOLEAN; normalize to bool/null.
+        const row = rows[0];
+        res.status(200).json({
+            consultation_id: row.consultation_id,
+            doctor_id: row.doctor_id,
+            session_status: row.session_status,
+            needs_medication: row.needs_medication === null ? null : Boolean(row.needs_medication)
         });
     } catch (err) {
         res.status(500).json({ error: err.message });

@@ -44,6 +44,31 @@
         />
       </div>
 
+      <!-- Path A/B declaration. Determines the rest of the patient's flow. -->
+      <div class="border-t border-slate-200 pt-6">
+        <label class="block text-sm font-semibold text-slate-700 mb-2">Do you need medication for this consultation?</label>
+        <div class="flex gap-3 max-w-md">
+          <label
+            :class="needsMedication === true
+              ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+              : 'border-slate-300 text-slate-600 hover:bg-slate-50'"
+            class="flex-1 text-center border rounded-lg py-2 text-sm font-medium cursor-pointer transition-colors"
+          >
+            <input type="radio" :value="true" v-model="needsMedication" class="sr-only" />
+            Yes
+          </label>
+          <label
+            :class="needsMedication === false
+              ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+              : 'border-slate-300 text-slate-600 hover:bg-slate-50'"
+            class="flex-1 text-center border rounded-lg py-2 text-sm font-medium cursor-pointer transition-colors"
+          >
+            <input type="radio" :value="false" v-model="needsMedication" class="sr-only" />
+            No
+          </label>
+        </div>
+      </div>
+
       <div class="flex items-center gap-4 pt-2">
         <button
           type="submit"
@@ -51,19 +76,9 @@
         >
           Submit Questionnaire
         </button>
-        <p v-if="submitted" class="text-sm font-medium text-emerald-600">Your responses have been recorded.</p>
+        <p v-if="formError" class="text-sm font-medium text-red-500">{{ formError }}</p>
       </div>
     </form>
-
-    <div v-if="submitted" class="mt-6 max-w-2xl bg-slate-50 border border-slate-200 rounded-xl p-5">
-      <h3 class="text-sm font-bold text-slate-700 mb-3">Your Responses</h3>
-      <ul class="space-y-1.5">
-        <li v-for="question in questions" :key="question.id" class="text-sm text-slate-600 flex justify-between gap-4">
-          <span>{{ question.label }}</span>
-          <span class="font-medium text-slate-900">{{ answers[question.id] || '—' }}</span>
-        </li>
-      </ul>
-    </div>
   </div>
 </template>
 
@@ -89,13 +104,21 @@ const answers = reactive({
   duration: patientStore.questionnaire.answers.duration || ''
 })
 
-const submitted = ref(patientStore.questionnaire.submitted)
+// Path A/B declaration (seeded from the store so it persists if revisited).
+const needsMedication = ref(patientStore.needsMedication)
+const formError = ref('')
 
 const submitAnswers = () => {
+  if (needsMedication.value === null) {
+    formError.value = 'Please indicate whether you need medication.'
+    return
+  }
+  formError.value = ''
+
   patientStore.questionnaire.answers = { ...answers }
   patientStore.questionnaire.submitted = true
-  submitted.value = true
-  // Proceed into the live consultation queue.
+  patientStore.needsMedication = needsMedication.value
+  // Proceed into the live consultation queue (which carries the declaration).
   router.push('/patient/queue')
 }
 </script>

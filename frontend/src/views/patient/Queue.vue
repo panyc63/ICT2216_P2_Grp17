@@ -91,7 +91,11 @@ onMounted(async () => {
   }
 
   try {
-    await api.post('/api/queue/join', { patient_id: patientId, priority_score: 'normal' })
+    await api.post('/api/queue/join', {
+      patient_id: patientId,
+      priority_score: 'normal',
+      needs_medication: patientStore.needsMedication
+    })
   } catch (err) {
     // 409 means we're already queued — that's fine; anything else is a real error.
     if (err.response?.status !== 409) {

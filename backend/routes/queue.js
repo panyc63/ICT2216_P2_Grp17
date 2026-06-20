@@ -41,7 +41,7 @@ router.get('/list', async (req, res) => {
 
 // POST /api/queue/join — adds a patient to the active queue.
 router.post('/join', async (req, res) => {
-    const { patient_id, priority_score } = req.body;
+    const { patient_id, priority_score, needs_medication } = req.body;
 
     if (!patient_id) {
         return res.status(400).json({ error: 'patient_id is required.' });
@@ -60,6 +60,10 @@ router.post('/join', async (req, res) => {
         const entry = {
             patient_id,
             priority_score: priority_score || 'normal',
+            // Patient's Path A/B declaration from the questionnaire. Carried on
+            // the queue entry so it can be persisted to the consultation row at
+            // accept time (the consultation row doesn't exist yet here).
+            needs_medication: typeof needs_medication === 'boolean' ? needs_medication : null,
             timestamp: Date.now()
         };
 
@@ -90,6 +94,7 @@ router.get('/status/:patientId', async (req, res) => {
                 patient_id: entry.patient_id,
                 room_id: entry.room_id,
                 doctor_id: entry.doctor_id || null,
+                needs_medication: entry.needs_medication ?? null,
                 status: 'accepted'
             });
         }
@@ -104,6 +109,7 @@ router.get('/status/:patientId', async (req, res) => {
             timestamp: entry.timestamp,
             position: index + 1,
             total: waiting.length,
+            needs_medication: entry.needs_medication ?? null,
             status: 'waiting'
         });
     } catch (err) {

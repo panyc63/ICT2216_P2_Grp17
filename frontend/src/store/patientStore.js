@@ -11,12 +11,12 @@ export const patientStore = reactive({
   // localStorage so it survives a page refresh; login.vue keeps it in sync.
   patientId: localStorage.getItem('userId') || '',
 
-  // 1. Profile
+  // 1. Profile — populated from the backend (GET /api/users/:id) on mount,
+  // so it reflects the actual logged-in user rather than seed data.
   profile: {
-    name: 'Tan Wei Ming',
-    email: 'weiming.tan@example.com',
-    nric: 'S9123456A',
-    homeAddress: '123 Bukit Timah Road, #08-21, Singapore 589456'
+    name: '',
+    email: '',
+    homeAddress: ''
   },
 
   // 2. Questionnaire
@@ -24,6 +24,11 @@ export const patientStore = reactive({
     answers: {},
     submitted: false
   },
+
+  // Path A/B branch. null = not declared yet, false = no medication (Path A),
+  // true = needs medication (Path B). Declared in the questionnaire; drives the
+  // stepper, payment total, and closing message.
+  needsMedication: null,
 
   // Live consultation queue. Kept in the shared store (not the Queue page) so
   // it survives tab navigation — the poller in PatientLayout reads/writes this,

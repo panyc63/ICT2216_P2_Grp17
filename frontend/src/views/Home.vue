@@ -13,7 +13,10 @@
           Our modern digital clinic framework provides end-to-end automation, real-time doctor consultation queuing, and secure video feeds.
         </p>
         <div class="flex justify-center gap-4">
-          <router-link to="/login" class="bg-indigo-600 text-white px-8 py-3.5 rounded-lg font-semibold shadow-md hover:bg-indigo-700 hover:-translate-y-0.5 transition-all duration-200">
+          <router-link v-if="isLoggedIn" :to="portalPath" class="bg-indigo-600 text-white px-8 py-3.5 rounded-lg font-semibold shadow-md hover:bg-indigo-700 hover:-translate-y-0.5 transition-all duration-200">
+            Go to My Portal
+          </router-link>
+          <router-link v-else to="/login" class="bg-indigo-600 text-white px-8 py-3.5 rounded-lg font-semibold shadow-md hover:bg-indigo-700 hover:-translate-y-0.5 transition-all duration-200">
             Book Consultation
           </router-link>
         </div>
@@ -46,5 +49,7 @@
 </template>
 
 <script setup>
-// No complex logical hooks are needed for the static homepage view wrapper
+import { useAuth } from '../composables/useAuth'
+
+const { isLoggedIn, portalPath } = useAuth()
 </script>

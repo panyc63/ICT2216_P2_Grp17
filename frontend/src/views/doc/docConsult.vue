@@ -1,6 +1,6 @@
 <template>
   <div class="min-h-screen bg-slate-50 flex font-sans">
-    <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col">
+    <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col h-screen sticky top-0">
       <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-2">MediHealth Hub</div>
       <div class="mb-8 border-b border-slate-800 pb-4">
         <p class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Practitioner Portal</p>
@@ -14,7 +14,9 @@
         <button @click="router.push({ name: 'DocPrescribe' })" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors text-slate-300 hover:bg-slate-800 flex items-center gap-2"><span>📝</span> Rx Prescriptions</button>
       </nav>
 
-      <button @click="handleLogout" class="text-left text-red-400 hover:bg-slate-800 px-4 py-2 rounded-lg font-medium text-sm transition-colors">Logout</button>
+      <button @click="handleLogout" class="mt-4 pt-4 border-t border-slate-800 w-full text-left text-red-400 hover:bg-slate-800 px-4 py-2.5 rounded-lg font-semibold text-sm flex items-center gap-2">
+        <span>⏻</span> Logout
+      </button>
     </aside>
 
     <main class="flex-1 p-10">
@@ -97,6 +99,9 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
+import { useAuth } from '../../composables/useAuth'
+
+const { clearSession } = useAuth()
 
 const router = useRouter()
 
@@ -151,7 +156,7 @@ const rejoinRoom = (roomId) => {
 }
 
 const handleLogout = () => {
-  localStorage.clear()
+  clearSession()
   router.push('/')
 }
 

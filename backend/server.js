@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import { db } from './config/db.js';
 import queueRoutes from './routes/queue.js';
 import consultationRoutes from './routes/consultations.js';
+import medicalCertificateRoutes from './routes/medicalCertificates.js';
+import userRoutes from './routes/users.js';
 
 dotenv.config();
 
@@ -14,6 +16,8 @@ app.use(express.json());
 
 app.use('/api/queue', queueRoutes);
 app.use('/api/consultations', consultationRoutes);
+app.use('/api/medical-certificates', medicalCertificateRoutes);
+app.use('/api/users', userRoutes);
 
 app.post('/api/register', (req, res) => {
     const { email, password, role } = req.body;
