@@ -21,6 +21,23 @@ CREATE TABLE IF NOT EXISTS consultations (
     doctor_id VARCHAR(36),
     session_status ENUM('Pending', 'Active', 'Completed') NOT NULL,
     needs_medication BOOLEAN DEFAULT NULL,
+    collection_method VARCHAR(20) DEFAULT NULL,
+    FOREIGN KEY (patient_id) REFERENCES users(user_id) ON DELETE SET NULL,
+    FOREIGN KEY (doctor_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+-- prescriptions (one row per medication line; a consultation can have several)
+CREATE TABLE IF NOT EXISTS prescriptions (
+    prescription_id VARCHAR(36) PRIMARY KEY,
+    consultation_id VARCHAR(36),
+    patient_id VARCHAR(36),
+    doctor_id VARCHAR(36),
+    medication_name VARCHAR(255) NOT NULL,
+    dosage VARCHAR(255),
+    instructions VARCHAR(255),
+    status VARCHAR(20) DEFAULT 'Active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE CASCADE,
     FOREIGN KEY (patient_id) REFERENCES users(user_id) ON DELETE SET NULL,
     FOREIGN KEY (doctor_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
@@ -53,6 +70,7 @@ CREATE TABLE IF NOT EXISTS security_audit_logs (
 -- FAKE DATA INSERT
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE security_audit_logs;
+TRUNCATE TABLE prescriptions;
 TRUNCATE TABLE medical_certificates;
 TRUNCATE TABLE consultations;
 TRUNCATE TABLE users;

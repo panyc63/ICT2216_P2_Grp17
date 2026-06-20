@@ -43,6 +43,35 @@ const nextConsultationId = async () => {
     return `MH-C${String(lastNum + 1).padStart(3, '0')}`;
 };
 
+// Generic sequential id generator for prefixed string ids (e.g. MH-MC, MH-RX).
+const nextSeqId = async (table, idCol, prefix) => {
+    const [rows] = await dbPromise.query(
+        `SELECT ${idCol} AS id FROM ${table} WHERE ${idCol} LIKE ? ORDER BY ${idCol} DESC LIMIT 1`,
+        [`${prefix}%`]
+    );
+    if (rows.length === 0) return `${prefix}001`;
+    const lastNum = parseInt(rows[0].id.replace(prefix, ''), 10);
+    return `${prefix}${String(lastNum + 1).padStart(3, '0')}`;
+};
+
+// Removes the WebRTC signaling node and releases the patient's queue entry for a
+// room. Used both when a call ends and when a consultation is finalized.
+const teardownRoomAndQueue = async (id) => {
+    const snapshot = await rtdb.ref(QUEUE_REF)
+        .orderByChild('room_id')
+        .equalTo(id)
+        .once('value');
+
+    const updates = {};
+    snapshot.forEach((child) => {
+        updates[child.key] = null;
+    });
+    if (Object.keys(updates).length > 0) {
+        await rtdb.ref(QUEUE_REF).update(updates);
+    }
+    await rtdb.ref(`${ROOMS_REF}/${id}`).remove();
+};
+
 // POST /api/consultations/accept — doctor claims a patient and opens a room.
 // Body: { doctor_id, patient_id? }. Without patient_id, the front of the queue
 // is taken. consultation_id doubles as the WebRTC room id.
@@ -140,34 +169,131 @@ router.get('/active/:patientId', async (req, res) => {
     }
 });
 
-// POST /api/consultations/:id/complete — end the call and clean up.
-router.post('/:id/complete', async (req, res) => {
+// POST /api/consultations/:id/end — end the call: tear down signaling and
+// release the patient from the queue. Does NOT mark the consultation Completed
+// (that happens at finalize). Used on Hang Up so the patient is freed promptly.
+router.post('/:id/end', async (req, res) => {
     const { id } = req.params;
+    try {
+        await teardownRoomAndQueue(id);
+        res.status(200).json({ message: 'Call ended.' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/consultations/:id/finalize — doctor writes the clinical record:
+// always issues a Medical Certificate (diagnosis + validity); adds prescription
+// lines when provided; marks the consultation Completed; cleans up the room.
+router.post('/:id/finalize', async (req, res) => {
+    const { id } = req.params;
+    const { diagnosis, valid_until, prescription_items } = req.body;
+
+    if (!diagnosis || !valid_until) {
+        return res.status(400).json({ error: 'diagnosis and valid_until are required.' });
+    }
 
     try {
+        const [crows] = await dbPromise.query(
+            'SELECT consultation_id, patient_id, doctor_id, session_status FROM consultations WHERE consultation_id = ?',
+            [id]
+        );
+        if (crows.length === 0) {
+            return res.status(404).json({ error: 'Consultation not found.' });
+        }
+        const con = crows[0];
+
+        // Always issue a Medical Certificate.
+        const mcId = await nextSeqId('medical_certificates', 'mc_id', 'MH-MC');
+        await dbPromise.query(
+            `INSERT INTO medical_certificates
+                (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, is_revoked, diagnosis)
+             VALUES (?, ?, ?, ?, CURDATE(), ?, 0, ?)`,
+            [mcId, id, con.doctor_id, con.patient_id, valid_until, diagnosis]
+        );
+
+        // Add prescription lines (skip blank rows).
+        const items = Array.isArray(prescription_items)
+            ? prescription_items.filter((it) => it && typeof it.medication_name === 'string' && it.medication_name.trim())
+            : [];
+        let created = 0;
+        for (const it of items) {
+            const rxId = await nextSeqId('prescriptions', 'prescription_id', 'MH-RX');
+            await dbPromise.query(
+                `INSERT INTO prescriptions
+                    (prescription_id, consultation_id, patient_id, doctor_id, medication_name, dosage, instructions)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [rxId, id, con.patient_id, con.doctor_id, it.medication_name.trim(), (it.dosage || '').trim(), (it.instructions || '').trim()]
+            );
+            created += 1;
+        }
+
         await dbPromise.query(
             "UPDATE consultations SET session_status = 'Completed' WHERE consultation_id = ?",
             [id]
         );
 
-        // Remove the patient's queue entry tied to this room.
-        const snapshot = await rtdb.ref(QUEUE_REF)
-            .orderByChild('room_id')
-            .equalTo(id)
-            .once('value');
+        // Best-effort cleanup in case the call wasn't already ended.
+        await teardownRoomAndQueue(id);
 
-        const updates = {};
-        snapshot.forEach((child) => {
-            updates[child.key] = null;
-        });
-        if (Object.keys(updates).length > 0) {
-            await rtdb.ref(QUEUE_REF).update(updates);
+        res.status(200).json({ message: 'Consultation finalized.', mc_id: mcId, prescriptions_created: created });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// PATCH /api/consultations/:id/collection-method — patient's self-collect/
+// delivery choice for the prescribed medication.
+router.patch('/:id/collection-method', async (req, res) => {
+    const { id } = req.params;
+    const { collection_method } = req.body;
+
+    if (!['self-collect', 'delivery'].includes(collection_method)) {
+        return res.status(400).json({ error: 'collection_method must be self-collect or delivery.' });
+    }
+
+    try {
+        const [result] = await dbPromise.query(
+            'UPDATE consultations SET collection_method = ? WHERE consultation_id = ?',
+            [collection_method, id]
+        );
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Consultation not found.' });
         }
+        res.status(200).json({ message: 'Collection method updated.', collection_method });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
-        // Tear down the signaling node.
-        await rtdb.ref(`${ROOMS_REF}/${id}`).remove();
-
-        res.status(200).json({ message: 'Consultation completed.' });
+// GET /api/consultations/:id — consultation detail for the doctor's Finalize
+// screen (patient name + their Path A/B declaration). Defined last so it doesn't
+// shadow the more specific routes above.
+router.get('/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const [rows] = await dbPromise.query(
+            `SELECT c.consultation_id, c.patient_id, c.doctor_id, c.session_status,
+                    c.needs_medication, c.collection_method,
+                    COALESCE(p.name, p.email) AS patient_name
+             FROM consultations c
+             LEFT JOIN users p ON c.patient_id = p.user_id
+             WHERE c.consultation_id = ?`,
+            [id]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'Consultation not found.' });
+        }
+        const r = rows[0];
+        res.status(200).json({
+            consultation_id: r.consultation_id,
+            patient_id: r.patient_id,
+            doctor_id: r.doctor_id,
+            session_status: r.session_status,
+            needs_medication: r.needs_medication === null ? null : Boolean(r.needs_medication),
+            collection_method: r.collection_method,
+            patient_name: r.patient_name
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

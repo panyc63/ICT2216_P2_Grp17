@@ -82,22 +82,22 @@ const { localStream, remoteStream, status, videoDevices, selectedDeviceId, switc
 watch(localStream, (s) => { if (localVideo.value) localVideo.value.srcObject = s })
 watch(remoteStream, (s) => { if (remoteVideo.value) remoteVideo.value.srcObject = s })
 
-let completed = false
-
-const completeConsultation = async () => {
-  if (completed || !roomId) return
-  completed = true
-  try {
-    await api.post(`/api/consultations/${roomId}/complete`)
-  } catch (err) {
-    // Best-effort cleanup.
-  }
-}
+let ended = false
 
 const endCall = async () => {
   hangUp()
-  await completeConsultation()
-  router.push({ name: 'DocConsult' })
+  // Release the patient immediately (tear down room + queue); the consultation
+  // is NOT marked Completed here — that happens on the Finalize screen.
+  if (!ended && roomId) {
+    ended = true
+    try {
+      await api.post(`/api/consultations/${roomId}/end`)
+    } catch (err) {
+      // Best-effort — the patient may have already hung up.
+    }
+  }
+  // Doctor proceeds to write the clinical record (diagnosis + prescription).
+  router.push({ path: '/doc-finalize', query: { id: roomId } })
 }
 
 onMounted(async () => {

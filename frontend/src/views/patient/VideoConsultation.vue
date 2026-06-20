@@ -110,13 +110,15 @@ watch(remoteStream, (s) => { if (remoteVideo.value) remoteVideo.value.srcObject 
 
 let completed = false
 
-const completeConsultation = async () => {
+const endConsultation = async () => {
   if (completed || !roomId) return
   completed = true
   try {
-    await api.post(`/api/consultations/${roomId}/complete`)
+    // End the call (tear down room/queue). The doctor marks it Completed and
+    // writes the clinical record separately, on their Finalize screen.
+    await api.post(`/api/consultations/${roomId}/end`)
   } catch (err) {
-    // Best-effort; the doctor side may have completed it already.
+    // Best-effort; the doctor side may have already ended it.
   }
 }
 
@@ -145,7 +147,7 @@ watch(doctorReady, (ready) => {
 
 const endCall = async () => {
   hangUp()
-  await completeConsultation()
+  await endConsultation()
   router.push('/patient/payment')
 }
 

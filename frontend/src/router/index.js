@@ -8,6 +8,7 @@ import HardwareCheck from '../views/HardwareCheck.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
 import DocConsult from '../views/doc/docConsult.vue'
 import DocConsultRoom from '../views/doc/ConsultationRoom.vue'
+import DocFinalize from '../views/doc/DocFinalize.vue'
 
 // Patient-facing prototype views
 import PatientLayout from '../views/patient/PatientLayout.vue'
@@ -30,6 +31,7 @@ const routes = [
   { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard, meta: { requiresAuth: true } },
   { path: '/doc-consult', name: 'DocConsult', component: DocConsult, meta: { requiresAuth: true } },
   { path: '/doc-consult-room', name: 'DocConsultRoom', component: DocConsultRoom, meta: { requiresAuth: true } },
+  { path: '/doc-finalize', name: 'DocFinalize', component: DocFinalize, meta: { requiresAuth: true } },
   {
     path: '/patient',
     component: PatientLayout,
