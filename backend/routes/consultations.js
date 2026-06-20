@@ -1,6 +1,7 @@
 import express from 'express';
 import { db as rtdb } from '../config/firebase.js';
 import { dbPromise } from '../config/db.js';
+import { ensureOpenOrder, setOrderStatus, findOrderByConsultation } from '../services/orderService.js';
 
 const router = express.Router();
 
@@ -111,15 +112,29 @@ router.post('/accept', async (req, res) => {
 
         const consultationId = await nextConsultationId();
 
-        // Carry the patient's Path A/B declaration from the queue entry onto the
-        // persisted consultation record.
-        const needsMedication = typeof entry.needs_medication === 'boolean' ? entry.needs_medication : null;
+        // The order is the source of truth for the Path A/B declaration. Use the
+        // order linked at join time, falling back to find-or-create.
+        let order;
+        if (entry.order_id) {
+            const [orows] = await dbPromise.query('SELECT * FROM orders WHERE order_id = ?', [entry.order_id]);
+            order = orows[0];
+        }
+        if (!order) {
+            order = await ensureOpenOrder(entry.patient_id, { needs_medication: entry.needs_medication });
+        }
+        const orderId = order.order_id;
+        const needsMedication = order.needs_medication === null ? null : Boolean(order.needs_medication);
 
-        // Persist the consultation in MySQL (Stripe/Phase 2 keys off this).
+        // Persist the consultation, linked to its order. needs_medication is
+        // dual-written onto the consultation for the not-yet-migrated frontend.
         await dbPromise.query(
-            'INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status, needs_medication) VALUES (?, ?, ?, ?, ?)',
-            [consultationId, entry.patient_id, doctor_id, 'Active', needsMedication]
+            'INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status, needs_medication, order_id) VALUES (?, ?, ?, ?, ?, ?)',
+            [consultationId, entry.patient_id, doctor_id, 'Active', needsMedication, orderId]
         );
+
+        // Link order -> consultation and advance the lifecycle to InCall.
+        await dbPromise.query('UPDATE orders SET consultation_id = ? WHERE order_id = ?', [consultationId, orderId]);
+        await setOrderStatus(orderId, 'InCall', 'Consultation started');
 
         // Stamp the room id onto the patient's queue entry so their status
         // poll picks it up and routes them into the call.
@@ -133,6 +148,7 @@ router.post('/accept', async (req, res) => {
             consultation_id: consultationId,
             patient_id: entry.patient_id,
             doctor_id,
+            order_id: orderId,
             needs_medication: needsMedication
         });
     } catch (err) {
@@ -176,6 +192,14 @@ router.post('/:id/end', async (req, res) => {
     const { id } = req.params;
     try {
         await teardownRoomAndQueue(id);
+
+        // Advance the order to AwaitingFinalization (call done, doctor still to
+        // write the clinical record). Guard against double-firing.
+        const order = await findOrderByConsultation(id);
+        if (order && order.status === 'InCall') {
+            await setOrderStatus(order.order_id, 'AwaitingFinalization', 'Call ended');
+        }
+
         res.status(200).json({ message: 'Call ended.' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -233,6 +257,15 @@ router.post('/:id/finalize', async (req, res) => {
             [id]
         );
 
+        // Advance the order: Path A (no medication) is done; Path B still owes
+        // the medication fee. needs_medication comes from the order.
+        const order = await findOrderByConsultation(id);
+        if (order) {
+            const needsMed = Boolean(order.needs_medication);
+            const nextStatus = needsMed ? 'AwaitingPayment' : 'Completed';
+            await setOrderStatus(order.order_id, nextStatus, 'Consultation finalized');
+        }
+
         // Best-effort cleanup in case the call wasn't already ended.
         await teardownRoomAndQueue(id);
 
@@ -260,6 +293,13 @@ router.patch('/:id/collection-method', async (req, res) => {
         if (result.affectedRows === 0) {
             return res.status(404).json({ error: 'Consultation not found.' });
         }
+
+        // Dual-write to the order (the source of truth going forward).
+        const order = await findOrderByConsultation(id);
+        if (order) {
+            await dbPromise.query('UPDATE orders SET collection_method = ? WHERE order_id = ?', [collection_method, order.order_id]);
+        }
+
         res.status(200).json({ message: 'Collection method updated.', collection_method });
     } catch (err) {
         res.status(500).json({ error: err.message });

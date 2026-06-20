@@ -1,5 +1,6 @@
 import express from 'express';
 import { db } from '../config/firebase.js';
+import { ensureOpenOrder, getActiveOrder, setOrderStatus } from '../services/orderService.js';
 
 const router = express.Router();
 
@@ -57,13 +58,18 @@ router.post('/join', async (req, res) => {
             return res.status(409).json({ error: 'Patient is already in the queue.' });
         }
 
+        // Orders are the source of truth: find-or-create the patient's open
+        // order, record the declaration, and move it to InQueue.
+        const order = await ensureOpenOrder(patient_id, { needs_medication });
+        await setOrderStatus(order.order_id, 'InQueue', 'Joined queue');
+
         const entry = {
             patient_id,
             priority_score: priority_score || 'normal',
-            // Patient's Path A/B declaration from the questionnaire. Carried on
-            // the queue entry so it can be persisted to the consultation row at
-            // accept time (the consultation row doesn't exist yet here).
-            needs_medication: typeof needs_medication === 'boolean' ? needs_medication : null,
+            // order_id links the queue entry to the order. needs_medication is
+            // still mirrored here (dual-write) for the not-yet-migrated frontend.
+            order_id: order.order_id,
+            needs_medication: typeof needs_medication === 'boolean' ? needs_medication : (order.needs_medication === null ? null : Boolean(order.needs_medication)),
             timestamp: Date.now()
         };
 
@@ -94,6 +100,7 @@ router.get('/status/:patientId', async (req, res) => {
                 patient_id: entry.patient_id,
                 room_id: entry.room_id,
                 doctor_id: entry.doctor_id || null,
+                order_id: entry.order_id || null,
                 needs_medication: entry.needs_medication ?? null,
                 status: 'accepted'
             });
@@ -109,6 +116,7 @@ router.get('/status/:patientId', async (req, res) => {
             timestamp: entry.timestamp,
             position: index + 1,
             total: waiting.length,
+            order_id: entry.order_id || null,
             needs_medication: entry.needs_medication ?? null,
             status: 'waiting'
         });
@@ -136,6 +144,13 @@ router.delete('/leave/:patientId', async (req, res) => {
             updates[child.key] = null;
         });
         await db.ref(QUEUE_REF).update(updates);
+
+        // Leaving the queue returns the order to Pending — but only if it was
+        // still InQueue (don't clobber InCall or later states).
+        const order = await getActiveOrder(patientId);
+        if (order && order.status === 'InQueue') {
+            await setOrderStatus(order.order_id, 'Pending', 'Left queue');
+        }
 
         res.status(200).json({ message: 'Patient removed from the queue.' });
     } catch (err) {
