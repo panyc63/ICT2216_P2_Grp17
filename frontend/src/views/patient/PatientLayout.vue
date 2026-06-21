@@ -107,7 +107,10 @@ const steps = computed(() => stepsForOrder(patientStore.order))
 const currentIndex = computed(() => currentStepIndex(patientStore.order))
 
 // Pages reached from Profile (not part of the sequential flow) hide the stepper.
-const HIDE_STEPPER_ON = ['/patient/profile', '/patient/download-mc', '/patient/track-delivery', '/patient/order-history', '/patient/pending-charges']
+// The stepper covers the active journey up to the call ending. Pages reached
+// on-demand (from Profile or via Resume) — including the now-optional
+// prescription / medication-payment — hide it.
+const HIDE_STEPPER_ON = ['/patient/profile', '/patient/download-mc', '/patient/track-delivery', '/patient/order-history', '/patient/pending-charges', '/patient/prescription', '/patient/medication-payment']
 const showStepper = computed(() => !HIDE_STEPPER_ON.includes(route.path))
 
 const circleClass = (i) => {

@@ -25,26 +25,20 @@ const STATUS_LABELS = {
 
 export const statusLabel = (status) => STATUS_LABELS[status] || status || '—'
 
-// Stepper definitions, branched by Path A (no medication) / Path B (medication).
-export const PATH_A_STEPS = [
+// Universal stepper (same for Path A and Path B). The patient's *active* guided
+// journey ends when the call ends — so "Done" highlights the moment the order
+// leaves InCall, covering every post-call status. Everything after the call
+// (finalization, medication payment, delivery) is on-demand via My Consultations,
+// not a forced linear step.
+export const STEPS = [
   { label: 'Get Ready', statuses: ['Pending'] },
   { label: 'Queue', statuses: ['InQueue'] },
-  { label: 'Consultation', statuses: ['InCall', 'AwaitingFinalization'] },
-  { label: 'Done', statuses: ['Completed'] }
+  { label: 'Consultation', statuses: ['InCall'] },
+  { label: 'Done', statuses: ['AwaitingFinalization', 'AwaitingPayment', 'AwaitingDelivery', 'Completed'] }
 ]
 
-export const PATH_B_STEPS = [
-  { label: 'Get Ready', statuses: ['Pending'] },
-  { label: 'Queue', statuses: ['InQueue'] },
-  { label: 'Consultation', statuses: ['InCall', 'AwaitingFinalization'] },
-  { label: 'Payment', statuses: ['AwaitingPayment'] },
-  { label: 'Delivery', statuses: ['AwaitingDelivery'] },
-  { label: 'Done', statuses: ['Completed'] }
-]
-
-// Path B when medication is requested; Path A otherwise (false or not yet declared).
-export const stepsForOrder = (order) =>
-  order && order.needs_medication === true ? PATH_B_STEPS : PATH_A_STEPS
+// Same steps for every order now (kept as a function for call-site stability).
+export const stepsForOrder = () => STEPS
 
 // Index of the step matching the order's current status. -1 for no order or a
 // terminal-exception status (Cancelled/Refunded/PendingRefund), so every step
@@ -81,7 +75,9 @@ export const resumeRouteForOrder = (order) => {
     case 'AwaitingFinalization':
       return order.needs_medication === true ? '/patient/prescription' : '/patient/closing'
     case 'AwaitingPayment':
-      return '/patient/medication-payment'
+      // Resume to Prescription (not straight to payment) so the collection-method
+      // choice isn't skipped — Prescription leads on to Medication Payment.
+      return '/patient/prescription'
     case 'AwaitingDelivery':
       return '/patient/closing'                // delivery tracking lives on Profile (D3)
     default:

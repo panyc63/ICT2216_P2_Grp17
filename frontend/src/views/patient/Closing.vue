@@ -8,7 +8,11 @@
     <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-8 max-w-2xl text-center">
       <div class="text-4xl mb-3">✅</div>
       <h2 class="text-lg font-semibold text-slate-900">Thank you for using MediFlow</h2>
-      <p class="mt-3 text-sm text-slate-600 leading-relaxed">{{ message }}</p>
+      <p class="mt-3 text-sm text-slate-600 leading-relaxed">
+        Your consultation is complete. Your doctor will finalize your visit when ready.
+        Check <span class="font-semibold text-slate-900">Profile → My Consultations</span>
+        for updates on your Medical Certificate, prescription, and any payment needed.
+      </p>
 
       <div class="mt-8 flex justify-center gap-3">
         <router-link
@@ -23,15 +27,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { patientStore } from '../../store/patientStore'
-
-// Path B (needed medication) also gets a delivery to track; Path A does not.
-// Read from the order (loaded by PatientLayout, with a latest-order fallback so
-// it resolves even after the order has gone terminal).
-const message = computed(() =>
-  patientStore.order.needs_medication === true
-    ? 'Check your Profile page for your Medical Certificate and to track your delivery.'
-    : 'Check your Profile page for your Medical Certificate. Track Delivery isn’t applicable since no medication was requested.'
-)
+// The active journey ends here once the call is over. The closing message is
+// universal — everything downstream (finalization, prescription, payment,
+// delivery) is on-demand via Profile → My Consultations, on the patient's
+// schedule, not forced from here.
 </script>
