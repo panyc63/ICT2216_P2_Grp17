@@ -15,9 +15,24 @@
       </span>
     </div>
 
+    <!-- Fallback: the room never appeared (orphaned/ended call reached by some
+         path other than the self-healing Resume). Give the patient a way out
+         instead of an endless "waiting" spinner. -->
+    <div v-if="roomUnavailable" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-10 max-w-2xl text-center">
+      <div class="text-4xl mb-3">📭</div>
+      <p class="text-lg font-semibold text-slate-900">This consultation isn't available</p>
+      <p class="text-sm text-slate-500 mt-1">We couldn't connect to this room — it may have already ended.</p>
+      <button
+        @click="router.push('/patient/profile')"
+        class="mt-6 px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700"
+      >
+        Back to Profile
+      </button>
+    </div>
+
     <!-- Pre-join: the patient's camera does NOT start until the doctor has
          entered the room; then the patient joins automatically. -->
-    <div v-if="!joined" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-10 max-w-2xl text-center">
+    <div v-else-if="!joined" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-10 max-w-2xl text-center">
       <div class="flex justify-center mb-5">
         <span class="h-12 w-12 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin"></span>
       </div>
@@ -100,8 +115,17 @@ const error = ref('')
 
 // doctorReady — the doctor has entered the room (their offer exists).
 // joined     — the patient has clicked Join and their camera is now live.
+// roomUnavailable — the room never appeared within the grace window (dead/ended
+//                   call reached by some path other than the self-healing Resume).
 const doctorReady = ref(false)
 const joined = ref(false)
+const roomUnavailable = ref(false)
+
+// If the room never shows up within this window (and we haven't joined), treat it
+// as unavailable rather than spinning forever. Generous, so a doctor who's just
+// slow to open the room isn't falsely flagged.
+const CONNECT_GRACE_MS = 20000
+let connectGraceTimer = null
 
 const localVideo = ref(null)
 const remoteVideo = ref(null)
@@ -191,15 +215,28 @@ onMounted(() => {
   roomListener = onValue(roomRef, (snap) => {
     if (snap.exists()) {
       roomSeen = true
+      // Real room — cancel the unavailable fallback.
+      if (connectGraceTimer) { clearTimeout(connectGraceTimer); connectGraceTimer = null }
     } else if (roomSeen) {
       onDoctorEnded()
     }
   })
+
+  // Fallback: if the room never appears (and we never join), surface a clear
+  // "not available" state instead of an endless spinner.
+  connectGraceTimer = setTimeout(() => {
+    if (!roomSeen && !joined.value) {
+      roomUnavailable.value = true
+      if (offerListener) { offerListener(); offerListener = null }
+      if (roomListener) { roomListener(); roomListener = null }
+    }
+  }, CONNECT_GRACE_MS)
 })
 
 onUnmounted(() => {
   // Navigating away mid-call still tears down media (but does not auto-complete
   // the consultation — that only happens via an explicit Hang Up).
+  if (connectGraceTimer) { clearTimeout(connectGraceTimer); connectGraceTimer = null }
   if (offerListener) offerListener()
   if (roomListener) roomListener()
   hangUp()

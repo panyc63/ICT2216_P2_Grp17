@@ -64,7 +64,8 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { patientStore } from '../../store/patientStore'
-import { statusLabel, isTerminal, resumeRouteForOrder } from '../../utils/orderFlow'
+import { statusLabel, isTerminal } from '../../utils/orderFlow'
+import { resumeOrder } from '../../composables/useOrderResume'
 
 const router = useRouter()
 
@@ -85,14 +86,9 @@ const statusClass = (s) => {
   return 'bg-indigo-50 text-indigo-700 ring-indigo-600/10'
 }
 
-// Set the store's order first so the target page has the right order immediately
-// (there is a single active order, so this matches its own /active lookup).
-const resume = (order) => {
-  const route = resumeRouteForOrder(order)
-  if (!route) return
-  patientStore.setOrder(order)
-  router.push(route)
-}
+// Resume the order at the page matching its status. InCall orders self-heal if
+// their call ended abnormally (see useOrderResume).
+const resume = (order) => resumeOrder(order, router)
 
 onMounted(async () => {
   if (!patientId) {

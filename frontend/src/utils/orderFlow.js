@@ -73,7 +73,11 @@ export const resumeRouteForOrder = (order) => {
     case 'InQueue':
       return '/patient/queue'
     case 'InCall':
-      return '/patient/video-consultation'     // best-effort (D2)
+      // Reconnect to the live call. InCall is normally handled by
+      // useOrderResume (which self-heals an orphaned call); this is the
+      // fallback for any direct caller, and includes the room id so the
+      // video page can actually connect.
+      return { path: '/patient/video-consultation', query: { room: order.consultation_id } }
     case 'AwaitingFinalization':
       return order.needs_medication === true ? '/patient/prescription' : '/patient/closing'
     case 'AwaitingPayment':

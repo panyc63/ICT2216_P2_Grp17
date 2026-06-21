@@ -45,6 +45,13 @@
             <td class="px-4 py-3 text-xs text-slate-400">{{ formatDate(order.created_at) }}</td>
             <td class="px-4 py-3 text-right whitespace-nowrap">
               <button
+                v-if="order.status === 'InCall'"
+                @click="markCallEnded(order)"
+                class="text-xs font-bold text-amber-600 hover:text-amber-800 ml-3"
+              >
+                Mark call ended
+              </button>
+              <button
                 v-if="order.status === 'AwaitingFinalization'"
                 @click="finalizeOrder = order"
                 class="text-xs font-bold text-emerald-600 hover:text-emerald-800 ml-3"
@@ -161,6 +168,26 @@ const finalizeOrder = ref(null)
 const onFinalized = async () => {
   finalizeOrder.value = null
   await fetchOrders()
+}
+
+// Recover an orphaned (or force-end a live) InCall order: ends the call and
+// advances it to AwaitingFinalization, where it can then be finalized. Reuses
+// the same /end endpoint as a normal hang-up.
+const markCallEnded = async (order) => {
+  if (!order.consultation_id) {
+    error.value = 'This order has no linked consultation to end.'
+    return
+  }
+  if (!window.confirm(`End the call for ${order.order_id}? If a call is still live this will disconnect both parties.`)) {
+    return
+  }
+  error.value = ''
+  try {
+    await api.post(`/api/consultations/${order.consultation_id}/end`)
+    await fetchOrders()
+  } catch (err) {
+    error.value = err.response?.data?.error || 'Could not end the call.'
+  }
 }
 
 const noteRequired = computed(() => action.value && NOTE_REQUIRED.includes(action.value.transition.to))

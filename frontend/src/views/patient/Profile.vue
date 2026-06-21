@@ -129,7 +129,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { patientStore } from '../../store/patientStore'
-import { resumeRouteForOrder } from '../../utils/orderFlow'
+import { resumeOrder } from '../../composables/useOrderResume'
 
 const router = useRouter()
 const profile = patientStore.profile
@@ -144,17 +144,16 @@ const needsMedication = computed(() => patientStore.order.needs_medication === t
 // Entry point into the sequential flow. The backend reuses the patient's open
 // order if one exists (single-active-order model), so resume it at the page that
 // matches its current status rather than always restarting at the questionnaire.
-// A brand-new order is Pending/undeclared, which resolves to the questionnaire.
+// resumeOrder also self-heals a reused, orphaned InCall order. A brand-new order
+// is Pending/undeclared, which resolves to the questionnaire.
 const startConsultation = async () => {
-  let target = '/patient/questionnaire'
   try {
     const { data } = await api.post('/api/orders', { patient_id: patientId })
-    patientStore.setOrder(data)
-    target = resumeRouteForOrder(data) || '/patient/questionnaire'
+    await resumeOrder(data, router)
   } catch (err) {
-    // Non-fatal — the questionnaire will ensure an order exists as a fallback.
+    // Non-fatal — fall back to the questionnaire (it ensures an order exists).
+    router.push('/patient/questionnaire')
   }
-  router.push(target)
 }
 
 const isEditing = ref(false)
