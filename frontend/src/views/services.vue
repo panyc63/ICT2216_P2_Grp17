@@ -3,7 +3,7 @@
     <div class="max-w-4xl mx-auto">
       <div class="text-center mb-12">
         <h1 class="text-3xl font-extrabold text-slate-950 tracking-tight sm:text-4xl mb-3">Our Digital Services</h1>
-        <p class="text-slate-500 max-w-xl mx-auto">Explore our robust institutional pipeline operations natively integrated within the MediHealth architecture.</p>
+        <p class="text-slate-500 max-w-xl mx-auto">Explore our robust institutional pipeline operations natively integrated within the MediFlow architecture.</p>
       </div>
 
       <div class="space-y-6">

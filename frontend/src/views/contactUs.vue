@@ -35,7 +35,7 @@
           <h3 class="text-lg font-bold text-slate-950 tracking-tight">Our Headquarters</h3>
           <p class="text-sm text-slate-600 font-medium"><b>Address:</b> 11 New Punggol Rd, Singapore 828616</p>
           <p class="text-sm text-slate-600 font-medium"><b>General Inquiries:</b> 
-            <a href="mailto:enquiries@MediFlow.com" class="text-indigo-600 hover:underline"> enquiries@MediFlow.com</a>
+            <a href="mailto:enquiries@mediflow.com" class="text-indigo-600 hover:underline"> enquiries@MediFlow.com</a>
           </p>
         </div>
         

@@ -1,6 +1,5 @@
 <template>
   <div class="min-h-screen bg-slate-50 flex flex-col font-sans">
-    <!-- HERO SECTION -->
     <section class="py-20 text-center bg-gradient-to-b from-white to-slate-50 px-4">
       <div class="max-w-3xl mx-auto">
         <span class="inline-block bg-indigo-50 text-indigo-700 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider mb-6">
