@@ -202,9 +202,13 @@ router.post('/:id/end', async (req, res) => {
 router.post('/:id/finalize', async (req, res) => {
     const { id } = req.params;
     const { diagnosis, valid_until, prescription_items } = req.body;
+    // MC issuance is optional (default on). A doctor may finalize without an MC,
+    // or skip it because one was already issued standalone (avoids duplicates).
+    const issueMc = req.body.issue_mc !== false;
 
-    if (!diagnosis || !valid_until) {
-        return res.status(400).json({ error: 'diagnosis and valid_until are required.' });
+    // diagnosis/valid_until are only needed for the certificate itself.
+    if (issueMc && (!diagnosis || !valid_until)) {
+        return res.status(400).json({ error: 'diagnosis and valid_until are required to issue a medical certificate.' });
     }
 
     try {
@@ -224,14 +228,17 @@ router.post('/:id/finalize', async (req, res) => {
             return res.status(409).json({ error: 'This consultation has already been finalized.' });
         }
 
-        // Always issue a Medical Certificate.
-        const mcId = await nextSeqId('medical_certificates', 'mc_id', 'MH-MC');
-        await dbPromise.query(
-            `INSERT INTO medical_certificates
-                (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, is_revoked, diagnosis)
-             VALUES (?, ?, ?, ?, CURDATE(), ?, 0, ?)`,
-            [mcId, id, con.doctor_id, con.patient_id, valid_until, diagnosis]
-        );
+        // Issue a Medical Certificate only when requested (see issueMc above).
+        let mcId = null;
+        if (issueMc) {
+            mcId = await nextSeqId('medical_certificates', 'mc_id', 'MH-MC');
+            await dbPromise.query(
+                `INSERT INTO medical_certificates
+                    (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, is_revoked, diagnosis)
+                 VALUES (?, ?, ?, ?, CURDATE(), ?, 0, ?)`,
+                [mcId, id, con.doctor_id, con.patient_id, valid_until, diagnosis]
+            );
+        }
 
         // Add prescription lines (skip blank rows).
         const items = Array.isArray(prescription_items)

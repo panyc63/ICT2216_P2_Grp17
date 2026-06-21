@@ -6,8 +6,24 @@
     </div>
 
     <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-8 max-w-2xl">
+      <!-- Cancelled/refunded by the clinic while waiting -->
+      <div v-if="cancelled" class="text-center py-6">
+        <div class="text-4xl mb-3">🚫</div>
+        <p class="text-lg font-semibold text-slate-900">Your consultation request was cancelled</p>
+        <p class="text-sm text-slate-500 mt-2 max-w-md mx-auto">
+          This request was cancelled by the clinic. Please contact support or check
+          My Consultations for details.
+        </p>
+        <router-link
+          to="/patient/order-history"
+          class="mt-6 inline-block px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700"
+        >
+          Go to My Consultations
+        </router-link>
+      </div>
+
       <!-- Waiting in the queue -->
-      <div v-if="position !== null" class="text-center py-6">
+      <div v-else-if="position !== null" class="text-center py-6">
         <div class="flex items-center justify-center gap-2 mb-6">
           <span class="h-3 w-3 rounded-full bg-indigo-600 animate-ping"></span>
           <span class="text-sm font-medium text-slate-500">Waiting...</span>
@@ -31,7 +47,7 @@
 
       <p v-if="error" class="mt-4 text-sm font-medium text-red-500 text-center">{{ error }}</p>
 
-      <div class="mt-8 flex justify-center">
+      <div v-if="!cancelled" class="mt-8 flex justify-center">
         <button
           @click="leaveQueue"
           class="px-5 py-2.5 border border-slate-300 text-slate-700 text-sm font-semibold rounded-lg shadow-sm bg-white hover:bg-slate-50"
@@ -44,7 +60,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { patientStore } from '../../store/patientStore'
@@ -65,6 +81,22 @@ const total = computed(() => patientStore.queue.total)
 
 // Rough estimate: 3 minutes per person ahead of you.
 const estimatedWait = computed(() => (position.value ? position.value * 3 : 0))
+
+// The clinic cancelled/refunded the order while the patient was waiting. The
+// order status is kept fresh by PatientLayout's poller; react to it here so the
+// patient isn't left polling a dead queue.
+const CANCELLED_STATUSES = ['Cancelled', 'Refunded', 'PendingRefund']
+const cancelled = computed(() => CANCELLED_STATUSES.includes(patientStore.order.status))
+
+// Once cancelled, stop the queue polling/banner (the backend also removes the
+// Firebase entry, but this is immediate and local).
+watch(cancelled, (isCancelled) => {
+  if (isCancelled) {
+    patientStore.queue.active = false
+    patientStore.queue.position = null
+    patientStore.queue.total = 0
+  }
+})
 
 const error = ref('')
 

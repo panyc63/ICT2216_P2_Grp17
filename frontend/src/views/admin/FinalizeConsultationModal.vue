@@ -17,29 +17,34 @@
         </p>
 
         <form @submit.prevent="submit" class="space-y-5">
-          <!-- Medical certificate (always issued) -->
+          <!-- Medical certificate (optional) -->
           <div class="space-y-3">
-            <h4 class="text-sm font-bold text-slate-900">Medical Certificate</h4>
-            <div>
-              <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Diagnosis</label>
-              <input
-                v-model="diagnosis"
-                type="text"
-                required
-                placeholder="e.g. Acute Upper Respiratory Tract Infection"
-                class="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              />
-            </div>
-            <div>
-              <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Valid Until</label>
-              <input
-                v-model="validUntil"
-                type="date"
-                required
-                class="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              />
-              <p class="text-xs text-slate-400 mt-1">Issue date is set to today automatically.</p>
-            </div>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input v-model="issueMc" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+              <span class="text-sm font-bold text-slate-900">Issue Medical Certificate for this visit?</span>
+            </label>
+
+            <template v-if="issueMc">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Diagnosis</label>
+                <input
+                  v-model="diagnosis"
+                  type="text"
+                  placeholder="e.g. Acute Upper Respiratory Tract Infection"
+                  class="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Valid Until</label>
+                <input
+                  v-model="validUntil"
+                  type="date"
+                  class="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+                <p class="text-xs text-slate-400 mt-1">Issue date is set to today automatically.</p>
+              </div>
+            </template>
+            <p v-else class="text-xs text-slate-400">No certificate will be issued for this consultation.</p>
           </div>
 
           <!-- Prescription (only when the patient requested medication) -->
@@ -108,6 +113,7 @@ const defaultValidUntil = () => {
   return d.toISOString().slice(0, 10)
 }
 
+const issueMc = ref(true)
 const diagnosis = ref('')
 const validUntil = ref(defaultValidUntil())
 const items = ref(needsMedication.value ? [{ medication_name: '', dosage: '', instructions: '' }] : [])
@@ -123,12 +129,17 @@ const submit = async () => {
     error.value = 'This order has no linked consultation to finalize.'
     return
   }
+  if (issueMc.value && (!diagnosis.value.trim() || !validUntil.value)) {
+    error.value = 'Diagnosis and valid-until are required to issue a certificate.'
+    return
+  }
   submitting.value = true
   error.value = ''
   try {
     await api.post(`/api/consultations/${props.order.consultation_id}/finalize`, {
-      diagnosis: diagnosis.value.trim(),
-      valid_until: validUntil.value,
+      issue_mc: issueMc.value,
+      diagnosis: issueMc.value ? diagnosis.value.trim() : undefined,
+      valid_until: issueMc.value ? validUntil.value : undefined,
       prescription_items: needsMedication.value ? items.value : []
     })
     emit('finalized')

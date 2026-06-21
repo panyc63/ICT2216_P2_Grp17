@@ -1,8 +1,34 @@
 import express from 'express';
 import { dbPromise } from '../config/db.js';
+import { db as rtdb } from '../config/firebase.js';
 import { ensureOpenOrder, getActiveOrder, patchOrderFields, setOrderStatus } from '../services/orderService.js';
 
 const router = express.Router();
+
+// Statuses that pull a patient out of the active consultation pipeline. When an
+// order reaches one of these, any live Firebase presence (queue entry / signaling
+// room) must be cleaned up so the patient stops appearing in the doctor's queue
+// and their own queue poll stops waiting.
+const RELEASE_STATUSES = ['Cancelled', 'Refunded', 'PendingRefund'];
+
+// Removes a patient's active_queues entries and their signaling room (if any).
+// Keyed by patient_id (the patient may be InQueue with no room yet).
+const releaseFromQueue = async (patientId, consultationId) => {
+    if (patientId) {
+        const snap = await rtdb.ref('active_queues')
+            .orderByChild('patient_id')
+            .equalTo(patientId)
+            .once('value');
+        const updates = {};
+        snap.forEach((child) => { updates[child.key] = null; });
+        if (Object.keys(updates).length > 0) {
+            await rtdb.ref('active_queues').update(updates);
+        }
+    }
+    if (consultationId) {
+        await rtdb.ref(`rooms/${consultationId}`).remove();
+    }
+};
 
 const normalize = (order) => ({
     ...order,
@@ -153,7 +179,7 @@ router.patch('/:id/status', async (req, res) => {
     }
 
     try {
-        const [rows] = await dbPromise.query('SELECT status FROM orders WHERE order_id = ?', [id]);
+        const [rows] = await dbPromise.query('SELECT status, patient_id, consultation_id FROM orders WHERE order_id = ?', [id]);
         if (rows.length === 0) {
             return res.status(404).json({ error: 'Order not found.' });
         }
@@ -165,6 +191,13 @@ router.patch('/:id/status', async (req, res) => {
         }
 
         await setOrderStatus(id, status, note && note.trim() ? note.trim() : null);
+
+        // Cancel/refund pulls the patient from the live pipeline: clear their
+        // Firebase queue entry + room so they leave the doctor's queue and their
+        // own queue poll stops waiting.
+        if (RELEASE_STATUSES.includes(status)) {
+            await releaseFromQueue(rows[0].patient_id, rows[0].consultation_id);
+        }
 
         const [updated] = await dbPromise.query('SELECT * FROM orders WHERE order_id = ?', [id]);
         res.status(200).json(normalize(updated[0]));
