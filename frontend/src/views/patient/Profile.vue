@@ -76,12 +76,30 @@
     <!-- Documents & delivery — accessible here rather than as flow steps. -->
     <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
       <router-link
+        to="/patient/order-history"
+        class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 hover:border-indigo-400 hover:shadow-md transition-all"
+      >
+        <div class="text-xl mb-2">🩺</div>
+        <p class="text-sm font-bold text-slate-900">My Consultations</p>
+        <p class="text-xs text-slate-500 mt-1">View your consultation history and resume any in progress.</p>
+      </router-link>
+
+      <router-link
         to="/patient/download-mc"
         class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 hover:border-indigo-400 hover:shadow-md transition-all"
       >
         <div class="text-xl mb-2">📄</div>
         <p class="text-sm font-bold text-slate-900">Medical Certificates</p>
         <p class="text-xs text-slate-500 mt-1">View and download your medical certificate.</p>
+      </router-link>
+
+      <router-link
+        to="/patient/pending-charges"
+        class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 hover:border-indigo-400 hover:shadow-md transition-all"
+      >
+        <div class="text-xl mb-2">💳</div>
+        <p class="text-sm font-bold text-slate-900">Pending Charges</p>
+        <p class="text-xs text-slate-500 mt-1">View and pay any outstanding charges raised for you.</p>
       </router-link>
 
       <router-link
@@ -111,6 +129,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { patientStore } from '../../store/patientStore'
+import { resumeRouteForOrder } from '../../utils/orderFlow'
 
 const router = useRouter()
 const profile = patientStore.profile
@@ -122,16 +141,20 @@ const patientId = patientStore.patientId || localStorage.getItem('userId') || ''
 // Track Delivery only applies to Path B (medication requested).
 const needsMedication = computed(() => patientStore.order.needs_medication === true)
 
-// Entry point into the sequential flow: create (or reuse) the order, then go to
-// the questionnaire. The stepper itself isn't clickable.
+// Entry point into the sequential flow. The backend reuses the patient's open
+// order if one exists (single-active-order model), so resume it at the page that
+// matches its current status rather than always restarting at the questionnaire.
+// A brand-new order is Pending/undeclared, which resolves to the questionnaire.
 const startConsultation = async () => {
+  let target = '/patient/questionnaire'
   try {
     const { data } = await api.post('/api/orders', { patient_id: patientId })
     patientStore.setOrder(data)
+    target = resumeRouteForOrder(data) || '/patient/questionnaire'
   } catch (err) {
     // Non-fatal — the questionnaire will ensure an order exists as a fallback.
   }
-  router.push('/patient/questionnaire')
+  router.push(target)
 }
 
 const isEditing = ref(false)

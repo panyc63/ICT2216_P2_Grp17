@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import { dbPromise } from '../config/db.js';
 import { FEES } from '../config/fees.js';
 import { markConsultFeePaid, markMedicationFeePaid } from '../services/orderService.js';
+import { nextSeqId } from '../services/ids.js';
+import { logAudit } from '../services/audit.js';
 
 dotenv.config(); // matches db.js / firebase.js — ensures env is loaded at import time
 
@@ -103,6 +105,114 @@ router.post('/medication/checkout', async (req, res) => {
     }
 });
 
+// ── Ad-hoc payment requests ────────────────────────────────────────────────
+// Standalone charges raised by a doctor/admin, decoupled from the orders
+// lifecycle (own payment_requests table). The amount is set at creation and read
+// back from the DB at pay time — never trusted from the client at checkout.
+
+// POST /api/payments/requests — create a request. Body:
+// { patient_id, requested_by, description, amount_cents }.
+router.post('/requests', async (req, res) => {
+    const { patient_id, requested_by, description, amount_cents } = req.body;
+    const amount = Number(amount_cents);
+
+    if (!patient_id || !requested_by || !description || !description.trim()) {
+        return res.status(400).json({ error: 'patient_id, requested_by and description are required.' });
+    }
+    if (!Number.isInteger(amount) || amount <= 0) {
+        return res.status(400).json({ error: 'amount_cents must be a positive whole number.' });
+    }
+
+    try {
+        const [prows] = await dbPromise.query('SELECT user_id FROM users WHERE user_id = ?', [patient_id]);
+        if (prows.length === 0) {
+            return res.status(404).json({ error: 'Patient not found.' });
+        }
+
+        const id = await nextSeqId('payment_requests', 'payment_request_id', 'MH-PR');
+        await dbPromise.query(
+            `INSERT INTO payment_requests
+                (payment_request_id, patient_id, requested_by, description, amount_cents, currency, status)
+             VALUES (?, ?, ?, ?, ?, ?, 'Pending')`,
+            [id, patient_id, requested_by, description.trim(), amount, FEES.currency]
+        );
+
+        await logAudit(requested_by, 'CREATE_PAYMENT_REQUEST', id);
+
+        const [rows] = await dbPromise.query('SELECT * FROM payment_requests WHERE payment_request_id = ?', [id]);
+        res.status(201).json(rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/payments/requests — all requests (admin oversight), newest first.
+router.get('/requests', async (req, res) => {
+    try {
+        const [rows] = await dbPromise.query(
+            `SELECT pr.*, COALESCE(p.name, p.email) AS patient_name
+             FROM payment_requests pr
+             LEFT JOIN users p ON pr.patient_id = p.user_id
+             ORDER BY pr.created_at DESC, pr.payment_request_id DESC`
+        );
+        res.status(200).json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/payments/requests/patient/:patientId — one patient's requests.
+router.get('/requests/patient/:patientId', async (req, res) => {
+    try {
+        const [rows] = await dbPromise.query(
+            'SELECT * FROM payment_requests WHERE patient_id = ? ORDER BY created_at DESC, payment_request_id DESC',
+            [req.params.patientId]
+        );
+        res.status(200).json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/payments/requests/:id/checkout — Stripe Checkout for a request. The
+// amount is read from the DB row (server-authoritative), not the client.
+router.post('/requests/:id/checkout', async (req, res) => {
+    try {
+        const [rows] = await dbPromise.query('SELECT * FROM payment_requests WHERE payment_request_id = ?', [req.params.id]);
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'Payment request not found.' });
+        }
+        const pr = rows[0];
+        if (pr.status === 'Paid') {
+            return res.status(200).json({ already_paid: true, url: null });
+        }
+        if (pr.status === 'Cancelled') {
+            return res.status(400).json({ error: 'This payment request has been cancelled.' });
+        }
+
+        const session = await stripe.checkout.sessions.create({
+            mode: 'payment',
+            line_items: [{
+                price_data: {
+                    currency: pr.currency || FEES.currency,
+                    product_data: { name: pr.description },
+                    unit_amount: pr.amount_cents
+                },
+                quantity: 1
+            }],
+            metadata: { type: 'payment_request', payment_request_id: pr.payment_request_id },
+            success_url: `${FRONTEND_URL}/patient/pending-charges?status=success`,
+            cancel_url: `${FRONTEND_URL}/patient/pending-charges?status=cancelled`
+        });
+
+        await dbPromise.query('UPDATE payment_requests SET stripe_session_id = ? WHERE payment_request_id = ?', [session.id, pr.payment_request_id]);
+
+        res.status(200).json({ url: session.url });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // POST /api/payments/webhook — Stripe payment confirmation. This is the SOURCE
 // OF TRUTH for paid status: flags are set here, server-side, only after the
 // signature is verified. The client success redirect is never trusted.
@@ -118,7 +228,8 @@ router.post('/webhook', async (req, res) => {
 
     try {
         if (event.type === 'checkout.session.completed') {
-            const { order_id, fee_type } = event.data.object.metadata || {};
+            const meta = event.data.object.metadata || {};
+            const { order_id, fee_type } = meta;
             // Idempotent: Stripe retries webhooks. Only mark + write history if
             // not already paid, so retries don't duplicate history rows or
             // re-run the status transition.
@@ -131,6 +242,14 @@ router.post('/webhook', async (req, res) => {
                 const [rows] = await dbPromise.query('SELECT medication_fee_paid FROM orders WHERE order_id = ?', [order_id]);
                 if (rows.length && !rows[0].medication_fee_paid) {
                     await markMedicationFeePaid(order_id); // sets flag + AwaitingPayment→AwaitingDelivery
+                }
+            } else if (meta.type === 'payment_request' && meta.payment_request_id) {
+                const [rows] = await dbPromise.query('SELECT status FROM payment_requests WHERE payment_request_id = ?', [meta.payment_request_id]);
+                if (rows.length && rows[0].status !== 'Paid') {
+                    await dbPromise.query(
+                        "UPDATE payment_requests SET status = 'Paid', paid_at = NOW() WHERE payment_request_id = ?",
+                        [meta.payment_request_id]
+                    );
                 }
             }
         }

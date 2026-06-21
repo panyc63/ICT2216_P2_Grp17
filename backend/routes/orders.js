@@ -92,6 +92,20 @@ router.get('/latest/:patientId', async (req, res) => {
     }
 });
 
+// GET /api/orders/patient/:patientId — all of one patient's orders (any status),
+// newest first. For the patient-facing "My Consultations" / order history view.
+router.get('/patient/:patientId', async (req, res) => {
+    try {
+        const [rows] = await dbPromise.query(
+            'SELECT * FROM orders WHERE patient_id = ? ORDER BY created_at DESC, order_id DESC',
+            [req.params.patientId]
+        );
+        res.status(200).json(rows.map(normalize));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // PATCH /api/orders/:id — update editable order fields (needs_medication /
 // collection_method). Used by the Phase 2 frontend.
 router.patch('/:id', async (req, res) => {

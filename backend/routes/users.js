@@ -3,6 +3,20 @@ import { dbPromise } from '../config/db.js';
 
 const router = express.Router();
 
+// GET /api/users/patients — minimal list of patients for selector UIs (doctor/
+// admin standalone MC + payment-request tools). Defined before /:userId so the
+// literal 'patients' segment isn't captured as a user id.
+router.get('/patients', async (req, res) => {
+    try {
+        const [rows] = await dbPromise.query(
+            "SELECT user_id, name, email FROM users WHERE role = 'Patient' ORDER BY COALESCE(name, email) ASC"
+        );
+        res.status(200).json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // GET /api/users/:userId — public-facing profile fields for one user.
 // Deliberately excludes password_hash (and NRIC is not stored/returned).
 router.get('/:userId', async (req, res) => {

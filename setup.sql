@@ -93,6 +93,23 @@ CREATE TABLE IF NOT EXISTS medical_certificates (
     FOREIGN KEY (patient_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
 
+-- payment_requests (ad-hoc charges raised by a doctor/admin, outside the normal
+-- consult/medication fee flow; decoupled from the orders lifecycle)
+CREATE TABLE IF NOT EXISTS payment_requests (
+    payment_request_id VARCHAR(36) PRIMARY KEY,
+    patient_id VARCHAR(36),
+    requested_by VARCHAR(36),
+    description VARCHAR(255) NOT NULL,
+    amount_cents INT NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'sgd',
+    status ENUM('Pending', 'Paid', 'Cancelled') NOT NULL DEFAULT 'Pending',
+    stripe_session_id VARCHAR(255) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    paid_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (patient_id) REFERENCES users(user_id) ON DELETE SET NULL,
+    FOREIGN KEY (requested_by) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
 -- security_audit_logs
 CREATE TABLE IF NOT EXISTS security_audit_logs (
     log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -106,6 +123,7 @@ CREATE TABLE IF NOT EXISTS security_audit_logs (
 -- FAKE DATA INSERT
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE security_audit_logs;
+TRUNCATE TABLE payment_requests;
 TRUNCATE TABLE order_status_history;
 TRUNCATE TABLE orders;
 TRUNCATE TABLE prescriptions;

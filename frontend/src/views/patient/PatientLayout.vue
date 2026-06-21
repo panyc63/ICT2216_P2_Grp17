@@ -80,6 +80,7 @@ import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { patientStore } from '../../store/patientStore'
 import { useAuth } from '../../composables/useAuth'
+import { stepsForOrder, currentStepIndex } from '../../utils/orderFlow'
 
 const route = useRoute()
 const router = useRouter()
@@ -98,35 +99,15 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const api = axios.create({ baseURL: API_BASE })
 
 // Read-only stepper, fully status-driven (Phase 3d): the highlighted step is
-// derived from order.status, not the current route. Path B (needs medication)
-// adds Payment + Delivery after the call; Path A (false/null) skips them.
-// Medical Cert / Track Delivery are NOT steps — they live on Profile.
-const PATH_A_STEPS = [
-  { label: 'Get Ready', statuses: ['Pending'] },
-  { label: 'Queue', statuses: ['InQueue'] },
-  { label: 'Consultation', statuses: ['InCall', 'AwaitingFinalization'] },
-  { label: 'Done', statuses: ['Completed'] }
-]
-const PATH_B_STEPS = [
-  { label: 'Get Ready', statuses: ['Pending'] },
-  { label: 'Queue', statuses: ['InQueue'] },
-  { label: 'Consultation', statuses: ['InCall', 'AwaitingFinalization'] },
-  { label: 'Payment', statuses: ['AwaitingPayment'] },
-  { label: 'Delivery', statuses: ['AwaitingDelivery'] },
-  { label: 'Done', statuses: ['Completed'] }
-]
-const steps = computed(() => (patientStore.order.needs_medication === true ? PATH_B_STEPS : PATH_A_STEPS))
-
-// Index of the step whose status set contains the order's current status. -1 for
-// no order yet or a terminal-exception status (Cancelled/Refunded/PendingRefund),
-// in which case every step renders as upcoming.
-const currentIndex = computed(() => {
-  const s = patientStore.order.status
-  return s ? steps.value.findIndex((step) => step.statuses.includes(s)) : -1
-})
+// derived from order.status, not the current route. The step definitions and the
+// status→index logic live in utils/orderFlow.js (shared with the order-history
+// Resume feature). Medical Cert / Track Delivery are NOT steps — they live on
+// Profile.
+const steps = computed(() => stepsForOrder(patientStore.order))
+const currentIndex = computed(() => currentStepIndex(patientStore.order))
 
 // Pages reached from Profile (not part of the sequential flow) hide the stepper.
-const HIDE_STEPPER_ON = ['/patient/profile', '/patient/download-mc', '/patient/track-delivery']
+const HIDE_STEPPER_ON = ['/patient/profile', '/patient/download-mc', '/patient/track-delivery', '/patient/order-history', '/patient/pending-charges']
 const showStepper = computed(() => !HIDE_STEPPER_ON.includes(route.path))
 
 const circleClass = (i) => {

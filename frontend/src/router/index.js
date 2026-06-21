@@ -8,7 +8,6 @@ import HardwareCheck from '../views/HardwareCheck.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
 import DocConsult from '../views/doc/docConsult.vue'
 import DocConsultRoom from '../views/doc/ConsultationRoom.vue'
-import DocFinalize from '../views/doc/DocFinalize.vue'
 
 // Patient-facing prototype views
 import PatientLayout from '../views/patient/PatientLayout.vue'
@@ -21,6 +20,8 @@ import MedicationPayment from '../views/patient/MedicationPayment.vue'
 import Prescription from '../views/patient/Prescription.vue'
 import DownloadMC from '../views/patient/DownloadMC.vue'
 import TrackDelivery from '../views/patient/TrackDelivery.vue'
+import OrderHistory from '../views/patient/OrderHistory.vue'
+import PendingCharges from '../views/patient/PendingCharges.vue'
 import Closing from '../views/patient/Closing.vue'
 
 const routes = [
@@ -31,7 +32,6 @@ const routes = [
   { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard, meta: { requiresAuth: true } },
   { path: '/doc-consult', name: 'DocConsult', component: DocConsult, meta: { requiresAuth: true } },
   { path: '/doc-consult-room', name: 'DocConsultRoom', component: DocConsultRoom, meta: { requiresAuth: true } },
-  { path: '/doc-finalize', name: 'DocFinalize', component: DocFinalize, meta: { requiresAuth: true } },
   {
     path: '/patient',
     component: PatientLayout,
@@ -48,7 +48,9 @@ const routes = [
       { path: 'medication-payment', name: 'MedicationPayment', component: MedicationPayment },
       { path: 'closing', name: 'Closing', component: Closing },
       { path: 'download-mc', name: 'DownloadMC', component: DownloadMC },
-      { path: 'track-delivery', name: 'TrackDelivery', component: TrackDelivery }
+      { path: 'track-delivery', name: 'TrackDelivery', component: TrackDelivery },
+      { path: 'order-history', name: 'OrderHistory', component: OrderHistory },
+      { path: 'pending-charges', name: 'PendingCharges', component: PendingCharges }
     ]
   }
 ]

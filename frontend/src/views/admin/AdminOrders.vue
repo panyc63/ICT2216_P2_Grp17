@@ -45,6 +45,13 @@
             <td class="px-4 py-3 text-xs text-slate-400">{{ formatDate(order.created_at) }}</td>
             <td class="px-4 py-3 text-right whitespace-nowrap">
               <button
+                v-if="order.status === 'AwaitingFinalization'"
+                @click="finalizeOrder = order"
+                class="text-xs font-bold text-emerald-600 hover:text-emerald-800 ml-3"
+              >
+                Finalize
+              </button>
+              <button
                 v-for="t in transitionsFor(order.status)"
                 :key="t.to"
                 @click="openAction(order, t)"
@@ -101,12 +108,21 @@
         </ol>
       </div>
     </div>
+
+    <!-- Finalize modal (issues MC + prescriptions via /finalize) -->
+    <FinalizeConsultationModal
+      v-if="finalizeOrder"
+      :order="finalizeOrder"
+      @close="finalizeOrder = null"
+      @finalized="onFinalized"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
+import FinalizeConsultationModal from './FinalizeConsultationModal.vue'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const api = axios.create({ baseURL: API_BASE })
@@ -139,6 +155,13 @@ const submitting = ref(false)
 
 const historyOrder = ref(null)
 const history = ref([])
+
+// Finalize (issue MC + prescriptions) for an AwaitingFinalization order.
+const finalizeOrder = ref(null)
+const onFinalized = async () => {
+  finalizeOrder.value = null
+  await fetchOrders()
+}
 
 const noteRequired = computed(() => action.value && NOTE_REQUIRED.includes(action.value.transition.to))
 

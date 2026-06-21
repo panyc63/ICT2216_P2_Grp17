@@ -2,6 +2,7 @@ import express from 'express';
 import { db as rtdb } from '../config/firebase.js';
 import { dbPromise } from '../config/db.js';
 import { ensureOpenOrder, setOrderStatus, findOrderByConsultation } from '../services/orderService.js';
+import { nextSeqId } from '../services/ids.js';
 
 const router = express.Router();
 
@@ -42,17 +43,6 @@ const nextConsultationId = async () => {
 
     const lastNum = parseInt(rows[0].consultation_id.replace('MH-C', ''), 10);
     return `MH-C${String(lastNum + 1).padStart(3, '0')}`;
-};
-
-// Generic sequential id generator for prefixed string ids (e.g. MH-MC, MH-RX).
-const nextSeqId = async (table, idCol, prefix) => {
-    const [rows] = await dbPromise.query(
-        `SELECT ${idCol} AS id FROM ${table} WHERE ${idCol} LIKE ? ORDER BY ${idCol} DESC LIMIT 1`,
-        [`${prefix}%`]
-    );
-    if (rows.length === 0) return `${prefix}001`;
-    const lastNum = parseInt(rows[0].id.replace(prefix, ''), 10);
-    return `${prefix}${String(lastNum + 1).padStart(3, '0')}`;
 };
 
 // Removes the WebRTC signaling node and releases the patient's queue entry for a
@@ -226,6 +216,13 @@ router.post('/:id/finalize', async (req, res) => {
             return res.status(404).json({ error: 'Consultation not found.' });
         }
         const con = crows[0];
+
+        // Guard against double-finalize: once Completed, the MC/prescriptions are
+        // already issued and the order has moved on. Re-running would duplicate
+        // the MC. (Finalize can now be triggered from Admin Orders at any time.)
+        if (con.session_status === 'Completed') {
+            return res.status(409).json({ error: 'This consultation has already been finalized.' });
+        }
 
         // Always issue a Medical Certificate.
         const mcId = await nextSeqId('medical_certificates', 'mc_id', 'MH-MC');

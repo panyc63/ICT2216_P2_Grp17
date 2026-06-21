@@ -87,7 +87,9 @@ let ended = false
 const endCall = async () => {
   hangUp()
   // Release the patient immediately (tear down room + queue); the consultation
-  // is NOT marked Completed here — that happens on the Finalize screen.
+  // is NOT marked Completed here. The order sits in AwaitingFinalization until
+  // the doctor finalizes it later from the Admin Orders screen — no forced
+  // finalize step, so they're free to take the next patient.
   if (!ended && roomId) {
     ended = true
     try {
@@ -96,8 +98,7 @@ const endCall = async () => {
       // Best-effort — the patient may have already hung up.
     }
   }
-  // Doctor proceeds to write the clinical record (diagnosis + prescription).
-  router.push({ path: '/doc-finalize', query: { id: roomId } })
+  router.push({ name: 'DocConsult' })
 }
 
 onMounted(async () => {
