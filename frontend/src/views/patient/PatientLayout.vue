@@ -97,25 +97,33 @@ const handleLogout = () => {
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const api = axios.create({ baseURL: API_BASE })
 
-// Read-only stepper, branched by Path A/B. Common skeleton is Start Consultation
-// → Payment → Closing; Path B (needs medication) inserts Prescription before
-// Closing. Until the patient declares (needsMedication === null) the skeleton is
-// shown. Medical Cert / Track Delivery are NOT steps — they live on Profile.
-const steps = computed(() => {
-  const base = [
-    { label: 'Start Consultation', match: ['/patient/questionnaire', '/patient/queue', '/patient/video-consultation'] },
-    { label: 'Payment', match: ['/patient/payment'] }
-  ]
-  if (patientStore.needsMedication === true) {
-    base.push({ label: 'Prescription', match: ['/patient/prescription'] })
-  }
-  base.push({ label: 'Closing', match: ['/patient/closing'] })
-  return base
-})
+// Read-only stepper, fully status-driven (Phase 3d): the highlighted step is
+// derived from order.status, not the current route. Path B (needs medication)
+// adds Payment + Delivery after the call; Path A (false/null) skips them.
+// Medical Cert / Track Delivery are NOT steps — they live on Profile.
+const PATH_A_STEPS = [
+  { label: 'Get Ready', statuses: ['Pending'] },
+  { label: 'Queue', statuses: ['InQueue'] },
+  { label: 'Consultation', statuses: ['InCall', 'AwaitingFinalization'] },
+  { label: 'Done', statuses: ['Completed'] }
+]
+const PATH_B_STEPS = [
+  { label: 'Get Ready', statuses: ['Pending'] },
+  { label: 'Queue', statuses: ['InQueue'] },
+  { label: 'Consultation', statuses: ['InCall', 'AwaitingFinalization'] },
+  { label: 'Payment', statuses: ['AwaitingPayment'] },
+  { label: 'Delivery', statuses: ['AwaitingDelivery'] },
+  { label: 'Done', statuses: ['Completed'] }
+]
+const steps = computed(() => (patientStore.order.needs_medication === true ? PATH_B_STEPS : PATH_A_STEPS))
 
-// Index of the step matching the current route; -1 when off-flow (e.g. Profile),
+// Index of the step whose status set contains the order's current status. -1 for
+// no order yet or a terminal-exception status (Cancelled/Refunded/PendingRefund),
 // in which case every step renders as upcoming.
-const currentIndex = computed(() => steps.value.findIndex((s) => s.match.includes(route.path)))
+const currentIndex = computed(() => {
+  const s = patientStore.order.status
+  return s ? steps.value.findIndex((step) => step.statuses.includes(s)) : -1
+})
 
 // Pages reached from Profile (not part of the sequential flow) hide the stepper.
 const HIDE_STEPPER_ON = ['/patient/profile', '/patient/download-mc', '/patient/track-delivery']
@@ -152,10 +160,6 @@ const poll = async () => {
   if (!id) return
   try {
     const { data } = await api.get(`/api/queue/status/${id}`)
-    // Recover the Path A/B branch from the queue entry (e.g. after a refresh).
-    if (patientStore.needsMedication === null && typeof data.needs_medication === 'boolean') {
-      patientStore.needsMedication = data.needs_medication
-    }
     if (data.status === 'accepted' && data.room_id) {
       patientStore.queue.active = false
       stopPolling()
@@ -219,30 +223,69 @@ const loadProfile = async () => {
   }
 }
 
-// After a refresh, the in-memory branch is lost. Once the patient has left the
-// queue (post-call), recover it from their latest consultation record.
-const recoverNeedsMedication = async () => {
-  if (patientStore.needsMedication !== null) return
+// Load the patient's order into the store (source of truth for the journey).
+// Tries the active (open) order first, then falls back to the most recent one
+// so post-flow pages still resolve after the order goes terminal.
+const loadOrder = async () => {
   const id = patientId()
   if (!id) return
   try {
-    const { data } = await api.get(`/api/consultations/active/${id}`)
-    if (typeof data.needs_medication === 'boolean') {
-      patientStore.needsMedication = data.needs_medication
-    }
+    const { data } = await api.get(`/api/orders/active/${id}`)
+    patientStore.setOrder(data)
+    return
   } catch (err) {
-    // 404 — no consultation yet; nothing to recover.
+    if (err.response?.status !== 404) return
+  }
+  try {
+    const { data } = await api.get(`/api/orders/latest/${id}`)
+    patientStore.setOrder(data)
+  } catch (err) {
+    // 404 — no order yet; nothing to load.
   }
 }
+
+// Keep order.status live so the status-driven stepper tracks server-side
+// transitions that happen without a setOrder call (join → InQueue, accept →
+// InCall, end → AwaitingFinalization, finalize → AwaitingPayment/Completed).
+// Polls only while the stepper is visible and the patient's active flow is
+// ongoing — it stops once the order reaches a status the patient won't move past
+// on their own (delivery handoff or a terminal state), so it doesn't poll forever.
+const ORDER_POLL_DONE = ['AwaitingDelivery', 'Completed', 'Cancelled', 'Refunded']
+let orderPollTimer = null
+
+const startOrderPolling = () => {
+  if (orderPollTimer) return
+  orderPollTimer = setInterval(loadOrder, 4000)
+}
+
+const stopOrderPolling = () => {
+  if (orderPollTimer) {
+    clearInterval(orderPollTimer)
+    orderPollTimer = null
+  }
+}
+
+// Refresh immediately on navigation between flow pages (snappy), and start/stop
+// the poller based on whether the stepper is shown and the flow is still moving.
+watch(() => route.path, loadOrder)
+watch(
+  [showStepper, () => patientStore.order.status],
+  ([visible, status]) => {
+    if (visible && !ORDER_POLL_DONE.includes(status)) startOrderPolling()
+    else stopOrderPolling()
+  },
+  { immediate: true }
+)
 
 onMounted(() => {
   window.addEventListener('pagehide', releaseQueueOnExit)
   loadProfile()
-  recoverNeedsMedication()
+  loadOrder()
 })
 
 onUnmounted(() => {
   stopPolling()
+  stopOrderPolling()
   window.removeEventListener('pagehide', releaseQueueOnExit)
 })
 </script>

@@ -173,7 +173,8 @@ const confirmAndFinish = async () => {
       })
     }
     patientStore.medication.method = method.value
-    router.push('/patient/closing')
+    // Path B: collection chosen → pay the medication fee → closing.
+    router.push('/patient/medication-payment')
   } catch (err) {
     error.value = err.response?.data?.error || 'Could not save your collection choice.'
   } finally {

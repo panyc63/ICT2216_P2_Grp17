@@ -82,6 +82,12 @@ import axios from 'axios'
 import { ref as dbRef, onValue } from 'firebase/database'
 import { db } from '../../firebase'
 import { useWebRTC } from '../../composables/useWebRTC'
+import { patientStore } from '../../store/patientStore'
+
+// After the call: Path B (needs medication) goes to the prescription + medication
+// payment; Path A goes straight to closing (consult fee was already paid).
+const postCallRoute = () =>
+  patientStore.order.needs_medication === true ? '/patient/prescription' : '/patient/closing'
 
 const route = useRoute()
 const router = useRouter()
@@ -148,7 +154,7 @@ watch(doctorReady, (ready) => {
 const endCall = async () => {
   hangUp()
   await endConsultation()
-  router.push('/patient/payment')
+  router.push(postCallRoute())
 }
 
 // When the doctor ends the consultation, the backend removes the rooms/{id}
@@ -163,7 +169,7 @@ const onDoctorEnded = () => {
   if (completed) return
   completed = true
   hangUp()
-  router.push('/patient/payment')
+  router.push(postCallRoute())
 }
 
 onMounted(() => {

@@ -314,10 +314,13 @@ router.get('/:id', async (req, res) => {
     try {
         const [rows] = await dbPromise.query(
             `SELECT c.consultation_id, c.patient_id, c.doctor_id, c.session_status,
-                    c.needs_medication, c.collection_method,
+                    COALESCE(o.needs_medication, c.needs_medication) AS needs_medication,
+                    COALESCE(o.collection_method, c.collection_method) AS collection_method,
+                    c.order_id,
                     COALESCE(p.name, p.email) AS patient_name
              FROM consultations c
              LEFT JOIN users p ON c.patient_id = p.user_id
+             LEFT JOIN orders o ON c.order_id = o.order_id
              WHERE c.consultation_id = ?`,
             [id]
         );
@@ -329,6 +332,7 @@ router.get('/:id', async (req, res) => {
             consultation_id: r.consultation_id,
             patient_id: r.patient_id,
             doctor_id: r.doctor_id,
+            order_id: r.order_id,
             session_status: r.session_status,
             needs_medication: r.needs_medication === null ? null : Boolean(r.needs_medication),
             collection_method: r.collection_method,

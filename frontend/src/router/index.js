@@ -16,7 +16,8 @@ import Profile from '../views/patient/Profile.vue'
 import Questionnaire from '../views/patient/Questionnaire.vue'
 import Queue from '../views/patient/Queue.vue'
 import VideoConsultation from '../views/patient/VideoConsultation.vue'
-import Payment from '../views/patient/Payment.vue'
+import ConsultPayment from '../views/patient/ConsultPayment.vue'
+import MedicationPayment from '../views/patient/MedicationPayment.vue'
 import Prescription from '../views/patient/Prescription.vue'
 import DownloadMC from '../views/patient/DownloadMC.vue'
 import TrackDelivery from '../views/patient/TrackDelivery.vue'
@@ -27,7 +28,6 @@ const routes = [
   { path: '/login', name: 'Login', component: Login },
   { path: '/register', name: 'Register', component: Register },
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
-  { path: '/hardware-check', name: 'HardwareCheck', component: HardwareCheck },
   { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard, meta: { requiresAuth: true } },
   { path: '/doc-consult', name: 'DocConsult', component: DocConsult, meta: { requiresAuth: true } },
   { path: '/doc-consult-room', name: 'DocConsultRoom', component: DocConsultRoom, meta: { requiresAuth: true } },
@@ -40,10 +40,12 @@ const routes = [
       { path: '', redirect: '/patient/profile' },
       { path: 'profile', name: 'PatientProfile', component: Profile },
       { path: 'questionnaire', name: 'Questionnaire', component: Questionnaire },
+      { path: 'hardware-check', name: 'HardwareCheck', component: HardwareCheck, props: { redirectTo: '/patient/consult-payment' } },
+      { path: 'consult-payment', name: 'ConsultPayment', component: ConsultPayment },
       { path: 'queue', name: 'Queue', component: Queue },
       { path: 'video-consultation', name: 'VideoConsultation', component: VideoConsultation },
-      { path: 'payment', name: 'Payment', component: Payment },
       { path: 'prescription', name: 'Prescription', component: Prescription },
+      { path: 'medication-payment', name: 'MedicationPayment', component: MedicationPayment },
       { path: 'closing', name: 'Closing', component: Closing },
       { path: 'download-mc', name: 'DownloadMC', component: DownloadMC },
       { path: 'track-delivery', name: 'TrackDelivery', component: TrackDelivery }

@@ -27,8 +27,10 @@ import { computed } from 'vue'
 import { patientStore } from '../../store/patientStore'
 
 // Path B (needed medication) also gets a delivery to track; Path A does not.
+// Read from the order (loaded by PatientLayout, with a latest-order fallback so
+// it resolves even after the order has gone terminal).
 const message = computed(() =>
-  patientStore.needsMedication === true
+  patientStore.order.needs_medication === true
     ? 'Check your Profile page for your Medical Certificate and to track your delivery.'
     : 'Check your Profile page for your Medical Certificate. Track Delivery isn’t applicable since no medication was requested.'
 )

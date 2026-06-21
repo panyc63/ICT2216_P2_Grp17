@@ -1,6 +1,8 @@
 <template>
-  <div class="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 font-sans">
-    <div class="max-w-xl mx-auto bg-white border border-slate-200 rounded-2xl shadow-sm p-8">
+  <!-- No full-page wrapper: this renders inside PatientLayout's <main> as a flow
+       step. (The optional redirectTo prop lets other contexts embed it too.) -->
+  <div class="font-sans">
+    <div class="max-w-xl bg-white border border-slate-200 rounded-2xl shadow-sm p-8">
       <h2 class="text-2xl font-bold text-slate-900 tracking-tight mb-2">Pre-Flight Hardware Check</h2>
       <p class="text-slate-500 text-sm mb-6">Verify your peripheral audio and video connection settings before starting your consultation stream.</p>
 
@@ -23,7 +25,7 @@
           Initialize Devices
         </button>
         <button @click="proceedToDashboard" :disabled="!streamActive" class="flex-1 py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:pointer-events-none">
-          Proceed to Workspace
+          Continue
         </button>
       </div>
     </div>

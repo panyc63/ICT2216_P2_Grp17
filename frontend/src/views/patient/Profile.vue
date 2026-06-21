@@ -120,10 +120,17 @@ const api = axios.create({ baseURL: API_BASE })
 const patientId = patientStore.patientId || localStorage.getItem('userId') || ''
 
 // Track Delivery only applies to Path B (medication requested).
-const needsMedication = computed(() => patientStore.needsMedication === true)
+const needsMedication = computed(() => patientStore.order.needs_medication === true)
 
-// Entry point into the sequential flow (the stepper itself isn't clickable).
-const startConsultation = () => {
+// Entry point into the sequential flow: create (or reuse) the order, then go to
+// the questionnaire. The stepper itself isn't clickable.
+const startConsultation = async () => {
+  try {
+    const { data } = await api.post('/api/orders', { patient_id: patientId })
+    patientStore.setOrder(data)
+  } catch (err) {
+    // Non-fatal — the questionnaire will ensure an order exists as a fallback.
+  }
   router.push('/patient/questionnaire')
 }
 

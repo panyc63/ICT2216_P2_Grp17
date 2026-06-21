@@ -85,9 +85,14 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import axios from 'axios'
 import { patientStore } from '../../store/patientStore'
 
 const router = useRouter()
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const api = axios.create({ baseURL: API_BASE })
+const patientId = patientStore.patientId || localStorage.getItem('userId') || ''
 
 const questions = [
   { id: 'fever', label: 'Do you have a fever?', type: 'yesno' },
@@ -104,21 +109,39 @@ const answers = reactive({
   duration: patientStore.questionnaire.answers.duration || ''
 })
 
-// Path A/B declaration (seeded from the store so it persists if revisited).
-const needsMedication = ref(patientStore.needsMedication)
+// Path A/B declaration (seeded from the order so it persists if revisited).
+const needsMedication = ref(patientStore.order.needs_medication)
 const formError = ref('')
+const submitting = ref(false)
 
-const submitAnswers = () => {
+const submitAnswers = async () => {
   if (needsMedication.value === null) {
     formError.value = 'Please indicate whether you need medication.'
     return
   }
   formError.value = ''
+  submitting.value = true
+
+  try {
+    // Ensure an order exists (covers landing here without clicking Start), then
+    // persist the declaration onto it — the order is the source of truth.
+    let orderId = patientStore.order.order_id
+    if (!orderId) {
+      const created = await api.post('/api/orders', { patient_id: patientId })
+      patientStore.setOrder(created.data)
+      orderId = created.data.order_id
+    }
+    const updated = await api.patch(`/api/orders/${orderId}`, { needs_medication: needsMedication.value })
+    patientStore.setOrder(updated.data)
+  } catch (err) {
+    formError.value = 'Could not save your response. Please try again.'
+    submitting.value = false
+    return
+  }
 
   patientStore.questionnaire.answers = { ...answers }
   patientStore.questionnaire.submitted = true
-  patientStore.needsMedication = needsMedication.value
-  // Proceed into the live consultation queue (which carries the declaration).
-  router.push('/patient/queue')
+  // Next: hardware check (gate) → consult payment → queue.
+  router.push('/patient/hardware-check')
 }
 </script>

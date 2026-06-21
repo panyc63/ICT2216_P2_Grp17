@@ -91,12 +91,18 @@ onMounted(async () => {
   }
 
   try {
+    // needs_medication is no longer sent — the order already owns it (set at the
+    // questionnaire) and the backend reads it from the order via order_id.
     await api.post('/api/queue/join', {
       patient_id: patientId,
-      priority_score: 'normal',
-      needs_medication: patientStore.needsMedication
+      priority_score: 'normal'
     })
   } catch (err) {
+    // 402 means the consultation fee hasn't been paid — send them to pay first.
+    if (err.response?.status === 402) {
+      router.push('/patient/consult-payment')
+      return
+    }
     // 409 means we're already queued — that's fine; anything else is a real error.
     if (err.response?.status !== 409) {
       error.value = err.response?.data?.error || 'Unable to join the queue.'
@@ -107,5 +113,14 @@ onMounted(async () => {
   // Hand polling/acceptance off to the persistent poller in PatientLayout.
   // Navigating to another tab no longer removes us from the queue.
   patientStore.queue.active = true
+
+  // Refresh the order so the status-driven stepper flips to "Queue" immediately
+  // (the join just moved it to InQueue server-side).
+  try {
+    const { data } = await api.get(`/api/orders/active/${patientId}`)
+    patientStore.setOrder(data)
+  } catch (err) {
+    // Non-fatal — PatientLayout's poller will pick up the status shortly.
+  }
 })
 </script>

@@ -63,6 +63,35 @@ export const ensureOpenOrder = async (patientId, { needs_medication } = {}) => {
     return order;
 };
 
+// Marks the consultation fee as paid on an order. The status is unchanged
+// (stays Pending) — paying the consult fee only unlocks the queue; the move to
+// InQueue happens when the patient actually joins. Used by the Phase 3a
+// dev-confirm bridge and (Phase 3b) the Stripe webhook.
+export const markConsultFeePaid = async (orderId) => {
+    await dbPromise.query('UPDATE orders SET consult_fee_paid = TRUE WHERE order_id = ?', [orderId]);
+    const [rows] = await dbPromise.query('SELECT status FROM orders WHERE order_id = ?', [orderId]);
+    await dbPromise.query(
+        'INSERT INTO order_status_history (order_id, status, note) VALUES (?, ?, ?)',
+        [orderId, rows.length ? rows[0].status : null, 'Consult fee paid']
+    );
+};
+
+// Marks the medication fee as paid (Path B) and advances the order from
+// AwaitingPayment to AwaitingDelivery. Used by the Phase 3a dev-confirm bridge
+// and (Phase 3c) the Stripe webhook.
+export const markMedicationFeePaid = async (orderId) => {
+    await dbPromise.query('UPDATE orders SET medication_fee_paid = TRUE WHERE order_id = ?', [orderId]);
+    const [rows] = await dbPromise.query('SELECT status FROM orders WHERE order_id = ?', [orderId]);
+    if (rows.length && rows[0].status === 'AwaitingPayment') {
+        await setOrderStatus(orderId, 'AwaitingDelivery', 'Medication fee paid');
+    } else {
+        await dbPromise.query(
+            'INSERT INTO order_status_history (order_id, status, note) VALUES (?, ?, ?)',
+            [orderId, rows.length ? rows[0].status : null, 'Medication fee paid']
+        );
+    }
+};
+
 // The order linked to a given consultation, or null.
 export const findOrderByConsultation = async (consultationId) => {
     const [rows] = await dbPromise.query(

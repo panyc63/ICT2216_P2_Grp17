@@ -61,6 +61,14 @@ router.post('/join', async (req, res) => {
         // Orders are the source of truth: find-or-create the patient's open
         // order, record the declaration, and move it to InQueue.
         const order = await ensureOpenOrder(patient_id, { needs_medication });
+
+        // Pay-before-queue gate: the consultation fee must be settled before the
+        // patient can enter the queue. Enforced here (not just in the UI) so the
+        // queue can't be joined by calling the API directly.
+        if (!order.consult_fee_paid) {
+            return res.status(402).json({ error: 'Consultation fee has not been paid.' });
+        }
+
         await setOrderStatus(order.order_id, 'InQueue', 'Joined queue');
 
         const entry = {

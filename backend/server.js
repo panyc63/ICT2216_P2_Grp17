@@ -8,12 +8,20 @@ import medicalCertificateRoutes from './routes/medicalCertificates.js';
 import prescriptionRoutes from './routes/prescriptions.js';
 import orderRoutes from './routes/orders.js';
 import userRoutes from './routes/users.js';
+import paymentRoutes from './routes/payments.js';
 
 dotenv.config();
 
 const app = express();
 
 app.use(cors());
+
+// Stripe webhook signature verification needs the raw, unparsed request body.
+// Register the raw parser for this exact path BEFORE express.json so the JSON
+// parser sees req._body already set and skips it. Order matters here — every
+// other /api/payments/* route still parses as JSON below.
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json());
 
 app.use('/api/queue', queueRoutes);
@@ -22,6 +30,7 @@ app.use('/api/medical-certificates', medicalCertificateRoutes);
 app.use('/api/prescriptions', prescriptionRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/payments', paymentRoutes);
 
 app.post('/api/register', (req, res) => {
     const { email, password, role } = req.body;
