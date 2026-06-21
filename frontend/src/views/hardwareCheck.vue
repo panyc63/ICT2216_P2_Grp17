@@ -42,14 +42,12 @@ let mediaStream = null
 
 const testHardwareDevices = async () => {
   try {
-    // Request localized access permissions for camera and sound input
     mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
     
     if (videoElement.value) {
       videoElement.value.srcObject = mediaStream
       streamActive.value = true
       
-      // Simulate real-time microphone gain input metrics
       simulateAudioInputLevel()
     }
   } catch (error) {
@@ -61,12 +59,11 @@ const testHardwareDevices = async () => {
 const simulateAudioInputLevel = () => {
   if (!streamActive.value) return
   setInterval(() => {
-    micVolume.value = Math.floor(Math.random() * 40) + 10 // Mock fluctuations
+    micVolume.value = Math.floor(Math.random() * 40) + 10 
   }, 150)
 }
 
 const proceedToDashboard = () => {
-  // Kill media feeds before shifting router space views
   if (mediaStream) {
     mediaStream.getTracks().forEach(track => track.stop())
   }

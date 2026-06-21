@@ -3,8 +3,11 @@ import Home from '../views/Home.vue'
 import Login from '../views/Login.vue'
 import Register from '../views/Register.vue'
 import ForgetPassword from '../views/ForgetPassword.vue'
+import AboutUs from '../views/aboutUs.vue'
+import Services from '../views/services.vue'
+import ContactUs from '../views/contactUs.vue'
 import HardwareCheck from '../views/HardwareCheck.vue'
-import AdminDashboard from '../views/AdminDashboard.vue'
+import AdminDashboard from '../views/admin/adminDashboard.vue'
 import DocConsult from '../views/doc/docConsult.vue'
 import DocPrescribe from '../views/doc/docPrescribe.vue'
 import DocDashboard from '../views/doc/docDashboard.vue'
@@ -23,11 +26,15 @@ import Prescription from '../views/patient/Prescription.vue'
 import DownloadMC from '../views/patient/DownloadMC.vue'
 import TrackDelivery from '../views/patient/TrackDelivery.vue'
 
+
 const routes = [
   { path: '/', name: 'Home', component: Home },
   { path: '/login', name: 'Login', component: Login },
   { path: '/register', name: 'Register', component: Register },
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
+  { path: '/about', name: 'AboutUs', component: AboutUs },
+  { path: '/services', name: 'Services', component: Services },
+  { path: '/contact', name: 'ContactUs', component: ContactUs },
   { path: '/hardware-check', name: 'HardwareCheck', component: HardwareCheck },
   { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard },
   { path: '/doc-dashboard', name: 'DocDashboard', component: DocDashboard },

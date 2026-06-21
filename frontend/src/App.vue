@@ -3,13 +3,15 @@
     <header class="main-header" v-if="showNavbar">
       <div class="container-fluid navbar">
         <div class="logo">
-          <router-link to="/" class="logo_a"> MediHealth </router-link>            
+          <router-link to="/" class="logo_a inline-block h-auto w-max"> 
+            <img src="/src/assets/img/mediflow_logo.png" alt="MediFlow Logo" class="block max-h-full h-12 w-auto object-contain" /> 
+          </router-link> 
         </div>
         <ul class="nav-links">
           <li><router-link to="/">Home</router-link></li>
-          <li><a href="#">About Us</a></li>
-          <li><a href="#">Services</a></li>
-          <li><a href="#">Contact Us</a></li>
+          <li><a href="/about">About Us</a></li>
+          <li><a href="/services">Services</a></li>
+          <li><a href="/contact">Contact Us</a></li>
         </ul>
         <router-link to="/login" class="nav-cta">Get Started</router-link>
       </div>
@@ -27,15 +29,13 @@ import { useRoute } from 'vue-router'
 
 const route = useRoute()
 
-// Computed conditional flag: Hides the main navigation layout on full-screen
-// console frames that carry their own navigation (Admin Dashboard, Patient Portal).
+
 const showNavbar = computed(() => {
   return route.path !== '/admin-dashboard' && !route.path.startsWith('/patient')
 })
 </script>
 
 <style>
-/* Adds layout spacing to push down content so it doesn't hide behind fixed headers */
 .has-navbar {
   padding-top: 80px; 
 }
