@@ -6,7 +6,6 @@ import Register from '../views/Register.vue'
 import ForgetPassword from '../views/ForgetPassword.vue'
 import HardwareCheck from '../views/HardwareCheck.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
-import DocConsult from '../views/doc/docConsult.vue'
 import DocConsultRoom from '../views/doc/ConsultationRoom.vue'
 
 // Patient-facing prototype views
@@ -30,7 +29,6 @@ const routes = [
   { path: '/register', name: 'Register', component: Register },
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
   { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard, meta: { requiresAuth: true } },
-  { path: '/doc-consult', name: 'DocConsult', component: DocConsult, meta: { requiresAuth: true } },
   { path: '/doc-consult-room', name: 'DocConsultRoom', component: DocConsultRoom, meta: { requiresAuth: true } },
   {
     path: '/patient',

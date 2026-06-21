@@ -98,7 +98,7 @@ const endCall = async () => {
       // Best-effort — the patient may have already hung up.
     }
   }
-  router.push({ name: 'DocConsult' })
+  router.push({ path: '/admin-dashboard', query: { tab: 'queue' } })
 }
 
 onMounted(async () => {

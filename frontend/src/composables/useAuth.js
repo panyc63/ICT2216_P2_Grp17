@@ -10,12 +10,12 @@ const currentRole = ref(localStorage.getItem('userRole') || '')
 const isLoggedIn = computed(() => !!currentUserId.value)
 
 // Role → landing route. Keep this the single source of truth for "where does
-// this role go". Doctor points at /doc-consult for now; switch to /doc-dashboard
-// once that exists (Issue 2). Roles without a portal yet fall back to home.
+// this role go". Doctor and Admin share the unified dashboard (doctor = admin
+// until RBAC exists). Roles without a portal yet fall back to home.
 const PORTAL_BY_ROLE = {
   Patient: '/patient/profile',
   Admin: '/admin-dashboard',
-  Doctor: '/doc-consult'
+  Doctor: '/admin-dashboard'
 }
 
 // Single source of truth for role → landing route, usable outside components

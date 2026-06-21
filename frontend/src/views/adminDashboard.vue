@@ -1,8 +1,9 @@
 <template>
   <div class="min-h-screen bg-slate-50 flex font-sans">
     <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col h-screen sticky top-0">
-      <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-8">MediHealth Admin</div>
+      <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-8">MediFlow Admin</div>
       <nav class="space-y-1 flex-1">
+        <button @click="activeTab = 'queue'" :class="[activeTab === 'queue' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Live Patient Queue</button>
         <button @click="activeTab = 'staff'" :class="[activeTab === 'staff' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Staff CRUD Management</button>
         <button @click="activeTab = 'orders'" :class="[activeTab === 'orders' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Order Management</button>
         <button @click="activeTab = 'issue-mc'" :class="[activeTab === 'issue-mc' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Issue MC</button>
@@ -22,6 +23,10 @@
     </aside>
 
     <main class="flex-1 p-10">
+      <div v-if="activeTab === 'queue'">
+        <LiveQueue />
+      </div>
+
       <div v-if="activeTab === 'staff'">
         <div class="flex justify-between items-center mb-6">
           <div>
@@ -144,8 +149,9 @@
 
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
+import LiveQueue from './admin/LiveQueue.vue'
 import AdminOrders from './admin/AdminOrders.vue'
 import IssueStandaloneMC from './admin/IssueStandaloneMC.vue'
 import RequestPayment from './admin/RequestPayment.vue'
@@ -153,8 +159,14 @@ import PaymentRequests from './admin/PaymentRequests.vue'
 
 const { clearSession } = useAuth()
 
+const route = useRoute()
 const router = useRouter()
-const activeTab = ref('staff')
+
+// Valid tabs; default to the Live Patient Queue (primary action for the merged
+// doctor/admin role). An optional ?tab= query can deep-link a specific tab
+// (e.g. the return-from-call redirect uses ?tab=queue).
+const TABS = ['queue', 'staff', 'orders', 'issue-mc', 'request-payment', 'payment-requests', 'consultations', 'recordings']
+const activeTab = ref(TABS.includes(route.query.tab) ? route.query.tab : 'queue')
 const showModal = ref(false)
 
 // Mock Data Pipelines
