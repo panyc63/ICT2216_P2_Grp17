@@ -7,13 +7,13 @@
 
       <form @submit.prevent="handleLogin" class="space-y-6">
         <div class="flex flex-col gap-2">
-          <label class="text-sm font-semibold text-slate-900" for="email">Work Email</label>
+          <label class="text-sm font-semibold text-slate-900" for="email">Email</label>
           <input 
             v-model="email"
             class="w-full px-4 py-3 border border-slate-200 bg-slate-50 rounded-xl text-sm focus:outline-none focus:border-indigo-600 focus:bg-white transition-all" 
             type="email" 
             id="email" 
-            placeholder="admin@medihealth.com" 
+            placeholder="admin@mediflow.com" 
             required
           >
         </div>

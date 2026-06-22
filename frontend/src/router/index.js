@@ -7,6 +7,10 @@ import ForgetPassword from '../views/ForgetPassword.vue'
 import HardwareCheck from '../views/HardwareCheck.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
 import DocConsultRoom from '../views/doc/ConsultationRoom.vue'
+import AboutUs from '../views/aboutUs.vue'
+import Services from '../views/services.vue'
+import ContactUs from '../views/contactUs.vue'
+//import AdminDashboard from '../views/admin/adminDashboard.vue'
 
 // Patient-facing prototype views
 import PatientLayout from '../views/patient/PatientLayout.vue'
@@ -28,6 +32,9 @@ const routes = [
   { path: '/login', name: 'Login', component: Login },
   { path: '/register', name: 'Register', component: Register },
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
+    { path: '/about', name: 'AboutUs', component: AboutUs },
+  { path: '/services', name: 'Services', component: Services },
+  { path: '/contact', name: 'ContactUs', component: ContactUs },
   { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard, meta: { requiresAuth: true } },
   { path: '/doc-consult-room', name: 'DocConsultRoom', component: DocConsultRoom, meta: { requiresAuth: true } },
   {
