@@ -9,6 +9,7 @@
     "express": "^4.22.2",
     "firebase-admin": "^14.0.0",
     "mysql2": "^3.22.5",
+    "nodemailer": "^9.0.1",
     "stripe": "^22.2.2"
   }
 }
