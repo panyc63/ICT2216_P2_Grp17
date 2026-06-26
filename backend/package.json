@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test security.test.js",
+    "audit:prod": "npm audit --omit=dev"
+  },
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
