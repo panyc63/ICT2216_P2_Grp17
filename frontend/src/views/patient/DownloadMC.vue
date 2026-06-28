@@ -49,8 +49,9 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { jsPDF } from 'jspdf'
+import { apiFetch } from '../../services/api'
 
 const mc = ref({
   patientName: 'Tan Wei Ming',
@@ -59,6 +60,22 @@ const mc = ref({
   validFrom: '18 Jun 2026',
   validTo: '20 Jun 2026',
   doctor: 'Dr. John Doe'
+})
+
+onMounted(async () => {
+  try {
+    const data = await apiFetch('/patient/medical-certificates/latest')
+    mc.value = {
+      patientName: data.patient_id,
+      diagnosis: data.diagnosis || 'Diagnosis available in protected clinical record',
+      issueDate: String(data.issue_date).slice(0, 10),
+      validFrom: String(data.issue_date).slice(0, 10),
+      validTo: String(data.valid_until).slice(0, 10),
+      doctor: data.doctor_id
+    }
+  } catch {
+    // Keep the sample visible if no certificate has been issued yet.
+  }
 })
 
 const downloadPdf = () => {

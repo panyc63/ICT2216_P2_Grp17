@@ -60,6 +60,7 @@
 
 <script setup>
 import { useRouter } from 'vue-router'
+import { logout } from '../../services/api'
 const router = useRouter()
-const handleLogout = () => { localStorage.clear(); router.push('/') }
+const handleLogout = () => { logout(router) }
 </script>

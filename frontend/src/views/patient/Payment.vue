@@ -27,13 +27,17 @@
           :disabled="processing"
           class="w-full py-3 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {{ processing ? 'Processing…' : `Pay Now — $${total.toFixed(2)}` }}
+          {{ processing ? 'Processing...' : `Pay Now - $${total.toFixed(2)}` }}
         </button>
-        <p class="mt-3 text-xs text-center text-slate-400">Secure payment simulation — no real card is charged.</p>
+        <p class="mt-3 text-xs text-center text-slate-400">Payment status is confirmed by server-side webhook verification.</p>
       </div>
 
-      <div v-else class="mt-8 rounded-xl bg-emerald-50 border border-emerald-200 p-5 text-center">
-        <div class="text-2xl mb-1">✅</div>
+      <div v-if="checkoutStatus && !payment.paid" class="mt-8 rounded-xl bg-amber-50 border border-amber-200 p-5 text-center">
+        <p class="text-sm font-bold text-amber-700">Checkout Created</p>
+        <p class="text-xs text-amber-600 mt-1">Reference: {{ reference }}</p>
+      </div>
+
+      <div v-else-if="payment.paid" class="mt-8 rounded-xl bg-emerald-50 border border-emerald-200 p-5 text-center">
         <p class="text-sm font-bold text-emerald-700">Payment Successful</p>
         <p class="text-xs text-emerald-600 mt-1">Reference: {{ reference }}</p>
       </div>
@@ -42,23 +46,29 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import { patientStore } from '../../store/patientStore'
+import { apiFetch } from '../../services/api'
 
 const payment = patientStore.payment
-
 const total = computed(() => payment.consultationFee + payment.medicationCost)
-
 const processing = ref(false)
 const reference = ref('')
+const checkoutStatus = ref('')
 
-const payNow = () => {
+const payNow = async () => {
   processing.value = true
-  // Simulate a short payment round-trip, then mark as paid in shared state.
-  setTimeout(() => {
-    payment.paid = true
-    reference.value = 'MF-' + Date.now().toString().slice(-8)
+  try {
+    const data = await apiFetch('/payments/checkout', {
+      method: 'POST',
+      body: JSON.stringify({})
+    })
+    payment.paid = data.status === 'Paid'
+    reference.value = data.checkoutReference
+    checkoutStatus.value = data.status
+    window.open(data.checkoutUrl, '_blank', 'noopener,noreferrer')
+  } finally {
     processing.value = false
-  }, 900)
+  }
 }
 </script>

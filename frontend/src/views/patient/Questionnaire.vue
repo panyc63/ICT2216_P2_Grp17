@@ -70,6 +70,7 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { patientStore } from '../../store/patientStore'
+import { apiFetch } from '../../services/api'
 
 const questions = [
   { id: 'fever', label: 'Do you have a fever?', type: 'yesno' },
@@ -88,7 +89,11 @@ const answers = reactive({
 
 const submitted = ref(patientStore.questionnaire.submitted)
 
-const submitAnswers = () => {
+const submitAnswers = async () => {
+  await apiFetch('/triage', {
+    method: 'POST',
+    body: JSON.stringify({ ...answers })
+  })
   patientStore.questionnaire.answers = { ...answers }
   patientStore.questionnaire.submitted = true
   submitted.value = true

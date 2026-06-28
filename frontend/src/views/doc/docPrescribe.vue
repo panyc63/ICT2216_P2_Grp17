@@ -134,6 +134,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { apiFetch, logout } from '../../services/api'
 
 const router = useRouter()
 const activeTab = ref('new-prescription')
@@ -145,7 +146,7 @@ const currentDoctor = ref({
 })
 
 // Options list for targeted patient select context
-const mockPatients = ref(['Michael Chang', 'Emma Watson', 'Eleanor Vance', 'Marcus Aurelius'])
+const mockPatients = ref(['John Smith'])
 
 // Master Data List mapping back orders
 const historyLogs = ref([
@@ -166,8 +167,20 @@ const defaultForm = {
 const prescriptionForm = ref({ ...defaultForm })
 
 // Actions logic
-const submitPrescription = () => {
-  // Push local dynamic state upward to the display matrix log array
+const submitPrescription = async () => {
+  await apiFetch('/prescriptions', {
+    method: 'POST',
+    body: JSON.stringify({
+      consultationId: 'MH-C001',
+      patientId: 'MH-U006',
+      medication: prescriptionForm.value.medication,
+      dosage: prescriptionForm.value.dosage,
+      frequency: prescriptionForm.value.frequency,
+      refills: prescriptionForm.value.refills,
+      instructions: prescriptionForm.value.instructions
+    })
+  })
+
   historyLogs.value.unshift({
     id: Date.now(),
     patientName: prescriptionForm.value.patientName,
@@ -186,7 +199,6 @@ const submitPrescription = () => {
 }
 
 const handleLogout = () => {
-  localStorage.clear()
-  router.push('/')
+  logout(router)
 }
 </script>

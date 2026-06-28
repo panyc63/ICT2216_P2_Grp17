@@ -99,6 +99,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { logout } from '../../services/api'
 
 const router = useRouter()
 const activeTab = ref('my-consultations')
@@ -143,7 +144,6 @@ const joinRoom = (roomId) => {
 }
 
 const handleLogout = () => {
-  localStorage.clear()
-  router.push('/')
+  logout(router)
 }
 </script>

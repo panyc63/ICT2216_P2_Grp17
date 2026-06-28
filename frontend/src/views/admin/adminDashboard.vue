@@ -94,12 +94,16 @@
         <h3 class="text-lg font-bold text-slate-900 mb-4">Provision Staff Profile</h3>
         <form @submit.prevent="createStaffAccount" class="space-y-4">
           <div>
+            <label class="block text-xs font-bold text-slate-700 uppercase">Name</label>
+            <input v-model="newStaff.name" type="text" class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" placeholder="Dr. Harper Lee" />
+          </div>
+          <div>
             <label class="block text-xs font-bold text-slate-700 uppercase">Email</label>
             <input v-model="newStaff.email" type="email" required class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" placeholder="harper@mediflow.com" />
           </div>
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase">Temporary Password</label>
-            <input v-model="newStaff.password" type="text" required class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" />
+            <input v-model="newStaff.password" type="password" required minlength="8" class="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md text-sm" />
           </div>
           <div>
             <label class="block text-xs font-bold text-slate-700 uppercase">Role</label>
@@ -122,6 +126,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { apiFetch, logout } from '../../services/api'
 
 const router = useRouter()
 const activeTab = ref('staff')
@@ -131,15 +136,11 @@ const staffList = ref([])
 const consultations = ref([])
 const recordings = ref([])
 
-const newStaff = ref({ email: '', role: 'Doctor', password: '1234' })
-
-const API_URL = 'http://localhost:5000/api'
+const newStaff = ref({ name: '', email: '', role: 'Doctor', password: 'Password123!' })
 
 const fetchStaffMembers = async () => {
   try {
-    const response = await fetch(`${API_URL}/staff`)
-    if (!response.ok) throw new Error('Failed to retrieve institutional staff array.')
-    const data = await response.json()
+    const data = await apiFetch('/staff')
     staffList.value = data
   } catch (error) {
     console.error('Database Sync Error:', error.message)
@@ -162,22 +163,19 @@ onMounted(() => {
 // Trigger endpoint registration logic
 const createStaffAccount = async () => {
   try {
-    const response = await fetch(`${API_URL}/register`, {
+    await apiFetch('/staff', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        name: newStaff.value.name || newStaff.value.email.split('@')[0],
         email: newStaff.value.email,
         password: newStaff.value.password,
         role: newStaff.value.role
       })
     })
 
-    const data = await response.json()
-    if (!response.ok) throw new Error(data.error || 'Identity generation fault.')
-
     alert('Staff account successfully provisioned inside database!')
     showModal.value = false
-    newStaff.value = { email: '', role: 'Doctor', password: '1234' }
+    newStaff.value = { name: '', email: '', role: 'Doctor', password: 'Password123!' }
     
     // Instantly refresh staff list array
     await fetchStaffMembers()
@@ -192,12 +190,9 @@ const deleteStaffAccount = async (userId) => {
   if (!confirm(`Are you confident you want to delete profile record ${userId}?`)) return
 
   try {
-    const response = await fetch(`${API_URL}/staff/${userId}`, {
+    await apiFetch(`/staff/${userId}`, {
       method: 'DELETE'
     })
-
-    const data = await response.json()
-    if (!response.ok) throw new Error(data.error || 'Server rejected removal sequence.')
 
     // Update state reactively
     staffList.value = staffList.value.filter(item => item.user_id !== userId)
@@ -207,7 +202,6 @@ const deleteStaffAccount = async (userId) => {
 }
 
 const handleLogout = () => {
-  localStorage.clear()
-  router.push('/login')
+  logout(router)
 }
 </script>
