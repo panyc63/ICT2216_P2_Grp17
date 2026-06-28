@@ -79,6 +79,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { logout } from '../../services/api'
 
 // Grab router instances
 const router = useRouter()
@@ -95,7 +96,6 @@ const navigateTo = (routeName) => {
 }
 
 const handleLogout = () => {
-  localStorage.clear()
-  router.push('/')
+  logout(router)
 }
 </script>

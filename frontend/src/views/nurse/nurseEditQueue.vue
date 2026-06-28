@@ -82,6 +82,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { apiFetch } from '../../services/api'
 
 const router = useRouter()
 
@@ -107,12 +108,20 @@ const addPatientToQueue = () => {
   newPatient.value = { name: '', doctor: 'Unassigned', priority: 'Routine' }
 }
 
-const callToConsultation = (id) => {
+const callToConsultation = async (id) => {
   const target = patientQueue.value.find(p => p.id === id)
   if (target) target.status = 'In consultation'
+  await apiFetch(`/nurse/queue/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'InConsultation' })
+  })
 }
 
-const dischargePatient = (id) => {
+const dischargePatient = async (id) => {
+  await apiFetch(`/nurse/queue/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'Discharged' })
+  })
   patientQueue.value = patientQueue.value.filter(p => p.id !== id)
 }
 </script>

@@ -30,8 +30,22 @@
           >
         </div>
 
+        <div v-if="mfaChallengeId" class="flex flex-col gap-2">
+          <label class="text-sm font-semibold text-slate-900" for="otp">Email verification code</label>
+          <input
+            v-model="otp"
+            class="w-full px-4 py-3 border border-slate-200 bg-slate-50 rounded-xl text-sm focus:outline-none focus:border-indigo-600 focus:bg-white transition-all"
+            type="text"
+            id="otp"
+            inputmode="numeric"
+            maxlength="6"
+            placeholder="6-digit code"
+            required
+          >
+        </div>
+
         <button type="submit" class="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl hover:bg-indigo-700 shadow-md transition-all">
-          Sign In
+          {{ mfaChallengeId ? 'Verify Code' : 'Sign In' }}
         </button>
       </form>
 
@@ -75,10 +89,13 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
+import { apiFetch, cacheSession, dashboardForRole } from '../services/api'
 
 const router = useRouter()
 const email = ref('')
 const password = ref('')
+const otp = ref('')
+const mfaChallengeId = ref('')
 
 const toast = reactive({
   show: false,
@@ -89,25 +106,36 @@ const toast = reactive({
 
 const handleLogin = async () => {
   try {
-    const response = await fetch('http://localhost:5000/api/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        email: email.value,
-        password: password.value
-      })
-    })
+    const data = mfaChallengeId.value
+      ? await apiFetch('/login/mfa', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: email.value,
+            challengeId: mfaChallengeId.value,
+            otp: otp.value
+          })
+        })
+      : await apiFetch('/login', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: email.value,
+            password: password.value
+          })
+        })
 
-    const data = await response.json()
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Authentication sequence failed.')
+    if (data.requiresMfa) {
+      mfaChallengeId.value = data.challengeId
+      toast.title = 'Verification Required'
+      toast.message = data.message || 'Enter the verification code sent to your email.'
+      toast.isError = false
+      toast.show = true
+      setTimeout(() => {
+        toast.show = false
+      }, 3000)
+      return
     }
 
-    localStorage.setItem('userRole', data.user.role)
-    localStorage.setItem('userId', data.user.user_id) 
+    cacheSession(data)
 
     toast.title = 'Welcome Back'
     toast.message = 'Login authenticated successfully.'
@@ -116,20 +144,7 @@ const handleLogin = async () => {
 
     setTimeout(() => {
       toast.show = false
-      
-      const role = data.user.role ? data.user.role.toLowerCase() : 'patient'
-      
-      if (role === 'admin') {
-        router.push('/admin-dashboard')
-      } else if (role === 'doctor') {
-        router.push('/doc-dashboard')
-      } else if (role === 'nurse') {
-        router.push('/nurse-dashboard')
-      } else if (role === 'pharmacist') {
-        router.push('/pharmacist-dashboard')
-      } else {
-        router.push('/patient')
-      }
+      router.push(router.currentRoute.value.query.redirect || dashboardForRole(data.user.role))
     }, 1500)
 
   } catch (error) {

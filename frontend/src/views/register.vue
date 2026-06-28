@@ -91,6 +91,7 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
+import { apiFetch } from '../services/api'
 
 const router = useRouter()
 const name = ref('')
@@ -106,11 +107,8 @@ const toast = reactive({
 
 const handleRegister = async () => {
   try {
-    const response = await fetch('http://localhost:5000/api/register', {
+    await apiFetch('/register', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
       body: JSON.stringify({
         name: name.value,
         email: email.value,
@@ -118,12 +116,6 @@ const handleRegister = async () => {
         role: 'Patient' 
       })
     })
-
-    const data = await response.json()
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Register sequence failed.')
-    }
 
     toast.title = 'Verify Your Email'
     toast.message = `We have sent a verification link to ${email.value}. Please confirm it to activate your account.`

@@ -14,6 +14,7 @@ import DocDashboard from '../views/doc/docDashboard.vue'
 import NurseDashboard from '../views/nurse/nurseDashboard.vue'
 import NurseViewQueue from '../views/nurse/nurseViewQueue.vue'
 import NurseEditQueue from '../views/nurse/nurseEditQueue.vue'
+import { dashboardForRole, getCurrentSession } from '../services/api'
 
 // Patient-facing prototype views
 import PatientLayout from '../views/patient/PatientLayout.vue'
@@ -36,16 +37,17 @@ const routes = [
   { path: '/services', name: 'Services', component: Services },
   { path: '/contact', name: 'ContactUs', component: ContactUs },
   { path: '/hardware-check', name: 'HardwareCheck', component: HardwareCheck },
-  { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard },
-  { path: '/doc-dashboard', name: 'DocDashboard', component: DocDashboard },
-  { path: '/doc-consult', name: 'DocConsult', component: DocConsult },
-  { path: '/doc-prescribe', name: 'DocPrescribe', component: DocPrescribe },
-  { path: '/nurse-dashboard', name: 'NurseDashboard', component: NurseDashboard },
-  { path: '/nurse-queue-view', name: 'NurseQueueView', component: NurseViewQueue },
-  { path: '/nurse-queue-edit', name: 'NurseQueueEdit', component: NurseEditQueue },
+  { path: '/admin-dashboard', name: 'AdminDashboard', component: AdminDashboard, meta: { requiresAuth: true, roles: ['Admin'] } },
+  { path: '/doc-dashboard', name: 'DocDashboard', component: DocDashboard, meta: { requiresAuth: true, roles: ['Doctor'] } },
+  { path: '/doc-consult', name: 'DocConsult', component: DocConsult, meta: { requiresAuth: true, roles: ['Doctor'] } },
+  { path: '/doc-prescribe', name: 'DocPrescribe', component: DocPrescribe, meta: { requiresAuth: true, roles: ['Doctor'] } },
+  { path: '/nurse-dashboard', name: 'NurseDashboard', component: NurseDashboard, meta: { requiresAuth: true, roles: ['Nurse'] } },
+  { path: '/nurse-queue-view', name: 'NurseQueueView', component: NurseViewQueue, meta: { requiresAuth: true, roles: ['Nurse', 'Doctor'] } },
+  { path: '/nurse-queue-edit', name: 'NurseQueueEdit', component: NurseEditQueue, meta: { requiresAuth: true, roles: ['Nurse'] } },
   {
     path: '/patient',
     component: PatientLayout,
+    meta: { requiresAuth: true, roles: ['Patient'] },
     children: [
       { path: '', redirect: '/patient/profile' },
       { path: 'profile', name: 'PatientProfile', component: Profile },
@@ -63,6 +65,22 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach(async (to) => {
+  if (!to.meta.requiresAuth) return true
+
+  const session = await getCurrentSession()
+  if (!session?.user) {
+    return { name: 'Login', query: { redirect: to.fullPath } }
+  }
+
+  const allowedRoles = to.meta.roles || []
+  if (allowedRoles.length > 0 && !allowedRoles.includes(session.user.role)) {
+    return dashboardForRole(session.user.role)
+  }
+
+  return true
 })
 
 export default router

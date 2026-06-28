@@ -61,16 +61,23 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { apiFetch } from '../../services/api'
 
 const router = useRouter()
 
 // Queue Pipeline
-const patientQueue = ref([
-  { id: 1, patientName: 'Michael Chang', assignedDoctor: 'Dr. John Doe', priority: 'Urgent', status: 'In consultation' },
-  { id: 2, patientName: 'Emma Watson', assignedDoctor: 'Dr. Sarah Lin', priority: 'Routine', status: 'In consultation' },
-  { id: 3, patientName: 'Eleanor Vance', assignedDoctor: 'Dr. John Doe', priority: 'Emergency', status: 'Waiting in Lobby' },
-  { id: 4, patientName: 'Marcus Aurelius', assignedDoctor: 'Unassigned', priority: 'Routine', status: 'Waiting in Lobby' }
-])
+const patientQueue = ref([])
+
+onMounted(async () => {
+  const data = await apiFetch('/nurse/queue')
+  patientQueue.value = data.map((item) => ({
+    id: item.triage_id,
+    patientName: item.patient_name,
+    assignedDoctor: item.assigned_doctor_id || 'Unassigned',
+    priority: item.priority_score,
+    status: item.status
+  }))
+})
 </script>
