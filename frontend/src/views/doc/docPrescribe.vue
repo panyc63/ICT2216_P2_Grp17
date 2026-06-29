@@ -44,8 +44,13 @@
               </div>
 
               <div>
-                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">Medication Name</label>
-                <input v-model="prescriptionForm.medication" type="text" required placeholder="e.g., Amoxicillin, Lisinopril" class="mt-1.5 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500" />
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">Medication (from inventory)</label>
+                <select v-model="prescriptionForm.medicationId" required class="mt-1.5 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+                  <option value="" disabled>Select a medication</option>
+                  <option v-for="med in inventory" :key="med.medication_id" :value="med.medication_id" :disabled="med.stock_quantity === 0">
+                    {{ med.name }} — {{ med.form }} ({{ med.stock_quantity }} in stock)
+                  </option>
+                </select>
               </div>
             </div>
 
@@ -132,12 +137,18 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch, logout } from '../../services/api'
 
 const router = useRouter()
 const activeTab = ref('new-prescription')
+
+// Live medication inventory (Deliverable 1: "interface tied to the MySQL inventory database").
+const inventory = ref([])
+onMounted(async () => {
+  try { inventory.value = await apiFetch('/inventory') } catch { inventory.value = [] }
+})
 
 // User Context State
 const currentDoctor = ref({
@@ -157,7 +168,7 @@ const historyLogs = ref([
 // Clean baseline target model schema for incoming data
 const defaultForm = {
   patientName: '',
-  medication: '',
+  medicationId: '',
   dosage: '',
   frequency: 'Once daily',
   refills: 0,
@@ -168,12 +179,13 @@ const prescriptionForm = ref({ ...defaultForm })
 
 // Actions logic
 const submitPrescription = async () => {
+  const selected = inventory.value.find((m) => m.medication_id === prescriptionForm.value.medicationId)
   await apiFetch('/prescriptions', {
     method: 'POST',
     body: JSON.stringify({
       consultationId: 'MH-C001',
       patientId: 'MH-U006',
-      medication: prescriptionForm.value.medication,
+      medicationId: prescriptionForm.value.medicationId,
       dosage: prescriptionForm.value.dosage,
       frequency: prescriptionForm.value.frequency,
       refills: prescriptionForm.value.refills,
@@ -184,7 +196,7 @@ const submitPrescription = async () => {
   historyLogs.value.unshift({
     id: Date.now(),
     patientName: prescriptionForm.value.patientName,
-    medication: `${prescriptionForm.value.medication} ${prescriptionForm.value.dosage}`,
+    medication: selected ? `${selected.name} ${prescriptionForm.value.dosage}` : prescriptionForm.value.dosage,
     dosage: prescriptionForm.value.dosage,
     frequency: prescriptionForm.value.frequency,
     refills: prescriptionForm.value.refills,

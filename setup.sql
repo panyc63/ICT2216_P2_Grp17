@@ -89,18 +89,32 @@ CREATE TABLE payment_events (
     INDEX idx_payment_patient_status (patient_id, status)
 );
 
+CREATE TABLE medication_inventory (
+    medication_id VARCHAR(40) PRIMARY KEY,
+    name VARCHAR(120) NOT NULL UNIQUE,
+    form VARCHAR(80) NOT NULL,
+    stock_quantity INT NOT NULL DEFAULT 0,
+    unit_price_cents INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
 CREATE TABLE prescriptions (
     prescription_id VARCHAR(50) PRIMARY KEY,
     consultation_id VARCHAR(36) NOT NULL,
     patient_id VARCHAR(36) NOT NULL,
     doctor_id VARCHAR(36) NOT NULL,
+    medication_id VARCHAR(40) NULL,
     medication_name VARCHAR(120) NOT NULL,
     dosage VARCHAR(80) NOT NULL,
     frequency VARCHAR(80) NOT NULL,
     refills INT NOT NULL DEFAULT 0,
     instructions_encrypted TEXT NULL,
     status ENUM('Issued', 'Fulfilled', 'Cancelled') NOT NULL DEFAULT 'Issued',
+    fulfilled_by VARCHAR(36) NULL,
+    fulfilled_at TIMESTAMP NULL DEFAULT NULL,
     issued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (medication_id) REFERENCES medication_inventory(medication_id) ON DELETE SET NULL,
     FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE RESTRICT,
     FOREIGN KEY (patient_id) REFERENCES users(user_id) ON DELETE RESTRICT,
     FOREIGN KEY (doctor_id) REFERENCES users(user_id) ON DELETE RESTRICT,
@@ -202,6 +216,13 @@ INSERT INTO triage_submissions (patient_id, answers_encrypted, priority_score, a
 
 INSERT INTO payment_events (patient_id, consultation_id, checkout_reference, amount_cents, currency, status, paid_at) VALUES
 ('MH-U006', 'MH-C001', 'MF-SEED-PAID-001', 7350, 'SGD', 'Paid', CURRENT_TIMESTAMP);
+
+INSERT INTO medication_inventory (medication_id, name, form, stock_quantity, unit_price_cents) VALUES
+('MED-AMOX500', 'Amoxicillin', 'Capsule 500mg', 120, 1500),
+('MED-PARA500', 'Paracetamol', 'Tablet 500mg', 500, 400),
+('MED-IBU400', 'Ibuprofen', 'Tablet 400mg', 0, 600),
+('MED-LORA10', 'Loratadine', 'Tablet 10mg', 80, 900),
+('MED-SALBINH', 'Salbutamol', 'Inhaler 100mcg', 35, 1200);
 
 INSERT INTO medical_certificates
 (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, diagnosis_encrypted, qr_token_hash, signature_hash, is_revoked)

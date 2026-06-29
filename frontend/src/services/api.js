@@ -87,6 +87,7 @@ export function dashboardForRole(role) {
   if (normalized === 'admin') return '/admin-dashboard';
   if (normalized === 'doctor') return '/doc-dashboard';
   if (normalized === 'nurse') return '/nurse-dashboard';
+  if (normalized === 'pharmacist') return '/pharmacist-dashboard';
   return '/patient';
 }
 

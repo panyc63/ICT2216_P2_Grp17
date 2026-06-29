@@ -140,6 +140,10 @@ app.get('/api/payments/:id', asyncHandler(authenticate), asyncHandler(getPayment
 
 app.post('/api/prescriptions', asyncHandler(authenticate), requireRole('Doctor'), requireRecentReauth, asyncHandler(createPrescription));
 app.get('/api/prescriptions/:id', asyncHandler(authenticate), asyncHandler(getPrescription));
+app.get('/api/inventory', asyncHandler(authenticate), requireRole('Doctor', 'Pharmacist', 'Admin'), asyncHandler(listInventory));
+app.get('/api/pharmacy/queue', asyncHandler(authenticate), requireRole('Pharmacist', 'Admin'), asyncHandler(listPharmacyQueue));
+app.post('/api/prescriptions/:id/fulfil', asyncHandler(authenticate), requireRole('Pharmacist'), requireRecentReauth, asyncHandler(fulfilPrescription));
+app.get('/api/patient/prescriptions', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(listPatientPrescriptions));
 
 app.post('/api/medical-certificates', asyncHandler(authenticate), requireRole('Doctor'), requireRecentReauth, asyncHandler(createMedicalCertificate));
 app.get('/api/medical-certificates/:id', asyncHandler(authenticate), asyncHandler(getMedicalCertificate));
@@ -893,22 +897,100 @@ async function getPayment(req, res) {
 async function createPrescription(req, res) {
   const consultationId = assertString(req.body.consultationId, 'consultationId', { min: 4, max: 36 });
   const patientId = assertString(req.body.patientId, 'patientId', { min: 4, max: 36 });
-  const medication = assertString(req.body.medication, 'medication', { min: 2, max: 120 });
   const dosage = assertString(req.body.dosage, 'dosage', { min: 1, max: 80 });
   const frequency = assertString(req.body.frequency, 'frequency', { min: 1, max: 80 });
   const refills = Number(req.body.refills || 0);
   const instructions = assertOptionalString(req.body.instructions, 'instructions', { min: 0, max: 500 });
+
+  // Prefer selecting from the MySQL inventory; fall back to free-text medication name.
+  let medicationId = assertOptionalString(req.body.medicationId, 'medicationId', { min: 3, max: 40 });
+  let medication = assertOptionalString(req.body.medication, 'medication', { min: 2, max: 120 });
+  if (medicationId) {
+    const meds = await query('SELECT name FROM medication_inventory WHERE medication_id = ? LIMIT 1', [medicationId]);
+    if (!meds[0]) throw badRequest('Selected medication is not in the inventory.');
+    medication = meds[0].name;
+  } else if (!medication) {
+    throw badRequest('A medication (id or name) is required.');
+  } else {
+    medicationId = null;
+  }
+
   await ensureAssignedDoctor(consultationId, req.user.user_id, patientId);
 
   const prescriptionId = `RX-${Date.now()}`;
   await execute(
     `INSERT INTO prescriptions
-     (prescription_id, consultation_id, patient_id, doctor_id, medication_name, dosage, frequency, refills, instructions_encrypted, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Issued')`,
-    [prescriptionId, consultationId, patientId, req.user.user_id, medication, dosage, frequency, refills, encryptText(instructions || '', config)]
+     (prescription_id, consultation_id, patient_id, doctor_id, medication_id, medication_name, dosage, frequency, refills, instructions_encrypted, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Issued')`,
+    [prescriptionId, consultationId, patientId, req.user.user_id, medicationId, medication, dosage, frequency, refills, encryptText(instructions || '', config)]
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'ISSUE_PRESCRIPTION', resourceType: 'PRESCRIPTION', resourceId: prescriptionId, outcome: 'SUCCESS', metadata: { consultationId, patientId, medication } });
   res.status(201).json({ prescriptionId, status: 'Issued' });
+}
+
+async function listInventory(_req, res) {
+  const rows = await query('SELECT medication_id, name, form, stock_quantity, unit_price_cents FROM medication_inventory ORDER BY name');
+  res.status(200).json(rows);
+}
+
+async function listPharmacyQueue(_req, res) {
+  const rows = await query(
+    `SELECT p.prescription_id, p.patient_id, u.name AS patient_name, p.medication_name, p.dosage, p.frequency, p.status, p.issued_at,
+            i.stock_quantity
+     FROM prescriptions p
+     JOIN users u ON u.user_id = p.patient_id
+     LEFT JOIN medication_inventory i ON i.medication_id = p.medication_id
+     WHERE p.status = 'Issued'
+     ORDER BY p.issued_at ASC`
+  );
+  res.status(200).json(rows);
+}
+
+async function listPatientPrescriptions(req, res) {
+  const rows = await query(
+    `SELECT prescription_id, medication_name, dosage, frequency, refills, status, issued_at, fulfilled_at
+     FROM prescriptions WHERE patient_id = ? ORDER BY issued_at DESC`,
+    [req.user.user_id]
+  );
+  res.status(200).json(rows);
+}
+
+async function fulfilPrescription(req, res) {
+  const prescriptionId = assertString(req.params.id, 'prescription id', { min: 3, max: 50 });
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    // Lock the prescription row for the duration of the fulfilment.
+    const [pres] = await connection.execute('SELECT * FROM prescriptions WHERE prescription_id = ? FOR UPDATE', [prescriptionId]);
+    const prescription = pres[0];
+    if (!prescription) throw notFound('Prescription not found.');
+    if (prescription.status !== 'Issued') throw badRequest('Only issued prescriptions can be fulfilled.');
+
+    if (prescription.medication_id) {
+      // Atomically decrement stock; the WHERE guard prevents overselling.
+      const [result] = await connection.execute(
+        'UPDATE medication_inventory SET stock_quantity = stock_quantity - 1 WHERE medication_id = ? AND stock_quantity > 0',
+        [prescription.medication_id]
+      );
+      if (result.affectedRows === 0) {
+        await connection.rollback();
+        return res.status(409).json({ error: 'Medication is out of stock.' });
+      }
+    }
+
+    await connection.execute(
+      "UPDATE prescriptions SET status = 'Fulfilled', fulfilled_by = ?, fulfilled_at = CURRENT_TIMESTAMP WHERE prescription_id = ?",
+      [req.user.user_id, prescriptionId]
+    );
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  await writeAudit(req, { actorId: req.user.user_id, action: 'FULFIL_PRESCRIPTION', resourceType: 'PRESCRIPTION', resourceId: prescriptionId, outcome: 'SUCCESS' });
+  res.status(200).json({ message: 'Prescription fulfilled.', status: 'Fulfilled' });
 }
 
 async function getPrescription(req, res) {

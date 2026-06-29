@@ -15,6 +15,7 @@ import DocDashboard from '../views/doc/docDashboard.vue'
 import NurseDashboard from '../views/nurse/nurseDashboard.vue'
 import NurseViewQueue from '../views/nurse/nurseViewQueue.vue'
 import NurseEditQueue from '../views/nurse/nurseEditQueue.vue'
+import PharmacistDashboard from '../views/pharmacist/pharmacistDashboard.vue'
 import { dashboardForRole, getCurrentSession } from '../services/api'
 
 // Patient-facing prototype views
@@ -46,6 +47,7 @@ const routes = [
   { path: '/nurse-dashboard', name: 'NurseDashboard', component: NurseDashboard, meta: { requiresAuth: true, roles: ['Nurse'] } },
   { path: '/nurse-queue-view', name: 'NurseQueueView', component: NurseViewQueue, meta: { requiresAuth: true, roles: ['Nurse', 'Doctor'] } },
   { path: '/nurse-queue-edit', name: 'NurseQueueEdit', component: NurseEditQueue, meta: { requiresAuth: true, roles: ['Nurse'] } },
+  { path: '/pharmacist-dashboard', name: 'PharmacistDashboard', component: PharmacistDashboard, meta: { requiresAuth: true, roles: ['Pharmacist'] } },
   {
     path: '/patient',
     component: PatientLayout,

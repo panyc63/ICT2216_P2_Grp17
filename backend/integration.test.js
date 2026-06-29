@@ -289,3 +289,54 @@ test('object-level: a doctor cannot act on a consultation assigned to another do
   const intruderStart = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: intruder, csrf, body: { action: 'start' } });
   assert.equal(intruderStart.status, 403);
 });
+
+// --- Phase 3: Pharmacy inventory + fulfilment -----------------------------
+const SEED_PHARMACIST = { user_id: 'MH-U004', email: 'pharmacy@mediflow.com', role: 'Pharmacist', token_version: 0 };
+
+test('pharmacy: prescribe from inventory -> fulfil -> stock decremented', async () => {
+  const doctor = mintSession(SEED_DOCTOR);
+  const pharmacist = mintSession(SEED_PHARMACIST);
+  const csrf = await getCsrf();
+
+  const inv = await api('/api/inventory', { session: doctor });
+  assert.equal(inv.status, 200);
+  const before = (await inv.json()).find((m) => m.medication_id === 'MED-PARA500').stock_quantity;
+
+  // Seed consultation MH-C002 = doctor MH-U002 + patient MH-U005.
+  const rx = await api('/api/prescriptions', {
+    method: 'POST', session: doctor, csrf,
+    body: { consultationId: 'MH-C002', patientId: 'MH-U005', medicationId: 'MED-PARA500', dosage: '1 tab', frequency: 'BD' },
+  });
+  assert.equal(rx.status, 201);
+  const { prescriptionId } = await rx.json();
+
+  const queue = await (await api('/api/pharmacy/queue', { session: pharmacist })).json();
+  assert.equal(queue.some((p) => p.prescription_id === prescriptionId), true);
+
+  const ful = await api(`/api/prescriptions/${prescriptionId}/fulfil`, { method: 'POST', session: pharmacist, csrf });
+  assert.equal(ful.status, 200);
+
+  const [stock] = await db.execute('SELECT stock_quantity FROM medication_inventory WHERE medication_id = ?', ['MED-PARA500']);
+  assert.equal(stock[0].stock_quantity, before - 1);
+  const [pr] = await db.execute('SELECT status FROM prescriptions WHERE prescription_id = ?', [prescriptionId]);
+  assert.equal(pr[0].status, 'Fulfilled');
+});
+
+test('pharmacy: out-of-stock medication cannot be fulfilled (oversell prevented)', async () => {
+  const doctor = mintSession(SEED_DOCTOR);
+  const pharmacist = mintSession(SEED_PHARMACIST);
+  const csrf = await getCsrf();
+  const rx = await api('/api/prescriptions', {
+    method: 'POST', session: doctor, csrf,
+    body: { consultationId: 'MH-C002', patientId: 'MH-U005', medicationId: 'MED-IBU400', dosage: '1 tab', frequency: 'TDS' },
+  });
+  const { prescriptionId } = await rx.json();
+  const ful = await api(`/api/prescriptions/${prescriptionId}/fulfil`, { method: 'POST', session: pharmacist, csrf });
+  assert.equal(ful.status, 409); // MED-IBU400 seeded with 0 stock
+});
+
+test('pharmacy: a patient cannot fulfil prescriptions (RBAC)', async () => {
+  const csrf = await getCsrf();
+  const res = await api('/api/prescriptions/RX-anything/fulfil', { method: 'POST', session: mintSession(SEED_PATIENT), csrf });
+  assert.equal(res.status, 403);
+});
