@@ -3,6 +3,9 @@ import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
+import multer from 'multer';
+import fs from 'fs/promises';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   ROLES,
@@ -45,6 +48,9 @@ import {
   generateMcKeyPair,
   decodeMcPayload,
   verifyMcTokenAsym,
+  scanBufferForMalware,
+  mintFirebaseCustomToken,
+  makeTurnCredentials,
   verifyJwt,
   verifyPassword,
 } from './security.js';
@@ -83,6 +89,9 @@ const triageLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'tr
 const chatLimit = rateLimit({ windowMs: 60 * 1000, max: 30, keyPrefix: 'chat' });
 const paymentLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'payment' });
 const verificationLimit = rateLimit({ windowMs: 60 * 1000, max: 20, keyPrefix: 'mc-verify' });
+
+// In-memory upload (max 5 MB) so the buffer can be malware-scanned before it ever touches disk.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 app.use(applySecurityHeaders(config));
 app.use(applyCors(config));
@@ -156,6 +165,15 @@ app.get('/api/verify/mc/:token', verificationLimit, asyncHandler(verifyMedicalCe
 app.get('/api/consultations/:id/messages', chatLimit, asyncHandler(authenticate), asyncHandler(listMessages));
 app.post('/api/consultations/:id/messages', chatLimit, asyncHandler(authenticate), asyncHandler(createMessage));
 app.post('/api/consultations/:id/attachments', chatLimit, asyncHandler(authenticate), asyncHandler(registerAttachment));
+// Secure file upload: malware-scanned (ClamAV, or EICAR stub when not configured) before storage.
+app.post('/api/consultations/:id/attachments/upload', chatLimit, asyncHandler(authenticate), upload.single('file'), asyncHandler(uploadAttachment));
+app.get('/api/attachments/:id', asyncHandler(authenticate), asyncHandler(downloadAttachment));
+
+// Realtime (Phase 4): mint a Firebase custom token (role-claimed) for chat/queue/signaling.
+app.post('/api/realtime/token', asyncHandler(authenticate), asyncHandler(issueRealtimeToken));
+// WebRTC (Phase 5): short-lived TURN credentials + consent-gated recording metadata.
+app.get('/api/consultations/:id/rtc-credentials', asyncHandler(authenticate), asyncHandler(getRtcCredentials));
+app.post('/api/consultations/:id/recording', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), asyncHandler(startRecordingSession));
 
 app.use((err, req, res, _next) => {
   const status = err.status || 500;
@@ -1149,6 +1167,81 @@ async function registerAttachment(req, res) {
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'REGISTER_ATTACHMENT', resourceType: 'ATTACHMENT', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { consultationId, mimeType: attachment.mimeType, sizeBytes: attachment.sizeBytes } });
   res.status(201).json({ attachmentId: result.insertId, malwareScanStatus: attachment.malwareScanStatus });
+}
+
+async function uploadAttachment(req, res) {
+  // Strict id pattern (no path-traversal chars) — defence-in-depth for the fs path below.
+  const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36, pattern: /^[A-Za-z0-9-]+$/ });
+  await ensureConsultationAccess(req.user, consultationId);
+  if (!req.file) throw badRequest('A file is required.');
+  // Validate type/size/name, then scan the bytes for malware before anything is stored.
+  const meta = scanAttachmentMetadata({ filename: req.file.originalname, mimeType: req.file.mimetype, sizeBytes: req.file.size });
+  const scan = await scanBufferForMalware(req.file.buffer, config);
+  if (!scan.clean) {
+    await writeAudit(req, { actorId: req.user.user_id, action: 'UPLOAD_ATTACHMENT', resourceType: 'ATTACHMENT', resourceId: consultationId, outcome: 'FAILURE', metadata: { signature: scan.signature, engine: scan.engine } });
+    return res.status(422).json({ error: 'Attachment failed malware scan.' });
+  }
+  // Store under a server-generated name (never the client's) outside the web root.
+  // Path components are validated (id pattern above; filename pattern in scanAttachmentMetadata).
+  const dir = path.join(config.uploadDir, consultationId);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir built from validated id
+  await fs.mkdir(dir, { recursive: true });
+  const storedName = `${randomToken(8)}_${meta.filename}`;
+  const storagePath = path.join(dir, storedName);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- server-generated path
+  await fs.writeFile(storagePath, req.file.buffer, { mode: 0o600 });
+  const status = scan.engine === 'clamav' ? 'PASSED' : 'PASSED_STUB';
+  const result = await execute(
+    `INSERT INTO message_attachments (consultation_id, uploader_id, filename, mime_type, size_bytes, malware_scan_status, storage_path)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [consultationId, req.user.user_id, meta.filename, meta.mimeType, meta.sizeBytes, status, storagePath]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'UPLOAD_ATTACHMENT', resourceType: 'ATTACHMENT', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { consultationId, engine: scan.engine } });
+  res.status(201).json({ attachmentId: result.insertId, malwareScanStatus: status, scanEngine: scan.engine });
+}
+
+async function downloadAttachment(req, res) {
+  const attachmentId = assertPositiveInteger(req.params.id, 'attachment id');
+  const rows = await query('SELECT * FROM message_attachments WHERE attachment_id = ? LIMIT 1', [attachmentId]);
+  const attachment = rows[0];
+  if (!attachment || !attachment.storage_path) throw notFound('Attachment not found.');
+  // Only participants of the consultation may download (object-level authz).
+  await ensureConsultationAccess(req.user, attachment.consultation_id);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- storage_path is server-written, never user input
+  const buffer = await fs.readFile(attachment.storage_path);
+  res.setHeader('Content-Type', attachment.mime_type);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', `attachment; filename="${attachment.filename.replace(/"/g, '')}"`);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'DOWNLOAD_ATTACHMENT', resourceType: 'ATTACHMENT', resourceId: String(attachmentId), outcome: 'SUCCESS' });
+  res.status(200).send(buffer);
+}
+
+async function issueRealtimeToken(req, res) {
+  const token = mintFirebaseCustomToken(req.user.user_id, { role: req.user.role }, config);
+  if (!token) return res.status(503).json({ error: 'Realtime (Firebase) is not configured.' });
+  await writeAudit(req, { actorId: req.user.user_id, action: 'REALTIME_TOKEN', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ token });
+}
+
+async function getRtcCredentials(req, res) {
+  const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
+  // Only the assigned doctor/patient of the consultation may obtain TURN credentials.
+  await ensureConsultationAccess(req.user, consultationId);
+  const creds = makeTurnCredentials(config);
+  if (!creds) return res.status(503).json({ error: 'TURN/WebRTC is not configured.' });
+  res.status(200).json({ ...creds, consultationId });
+}
+
+async function startRecordingSession(req, res) {
+  const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
+  await ensureConsultationAccess(req.user, consultationId);
+  if (req.body.consent !== true) throw badRequest('Patient consent is required to start a recording.');
+  const result = await execute(
+    'INSERT INTO recording_sessions (consultation_id, started_by, patient_consent) VALUES (?, ?, TRUE)',
+    [consultationId, req.user.user_id]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'START_RECORDING', resourceType: 'RECORDING', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { consultationId } });
+  res.status(201).json({ recordingId: result.insertId, consent: true });
 }
 
 async function ensureAssignedDoctor(consultationId, doctorId, patientId) {

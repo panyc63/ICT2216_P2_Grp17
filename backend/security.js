@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import net from 'net';
 
 export const ROLES = ['Patient', 'Nurse', 'Doctor', 'Admin', 'Pharmacist'];
 export const STAFF_ROLES = ['Nurse', 'Doctor', 'Admin', 'Pharmacist'];
@@ -39,6 +40,14 @@ export function getConfig() {
       .map((role) => role.trim())
       .filter(Boolean),
     secureCookies: isProduction,
+    // Optional integrations (feature-flagged; absent => graceful fallback / 503).
+    clamdHost: process.env.CLAMD_HOST || '',
+    clamdPort: Number(process.env.CLAMD_PORT || 3310),
+    uploadDir: process.env.UPLOAD_DIR || 'uploads',
+    firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
+    firebasePrivateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+    turnSecret: process.env.TURN_SECRET || '',
+    turnUrls: (process.env.TURN_URLS || '').split(',').map((u) => u.trim()).filter(Boolean),
   };
 
   if (missing.length > 0) {
@@ -477,4 +486,71 @@ export function sessionPayload(user, overrides = {}) {
 
 export function currentUnixSeconds() {
   return Math.floor(Date.now() / 1000);
+}
+
+// --- Malware scanning of uploaded files (Phase 4) -------------------------
+// Streams the buffer to a ClamAV daemon (clamd, INSTREAM) when CLAMD_HOST is set;
+// otherwise falls back to an EICAR-signature stub so the upload pipeline is testable
+// without a running antivirus engine.
+export async function scanBufferForMalware(buffer, config) {
+  if (!config.clamdHost) {
+    const eicar = 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE';
+    const clean = !Buffer.from(buffer).includes(eicar);
+    return { clean, engine: 'stub', signature: clean ? null : 'Eicar-Test-Signature' };
+  }
+  return scanWithClamd(buffer, config.clamdHost, config.clamdPort);
+}
+
+function scanWithClamd(buffer, host, port) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host, port });
+    let response = '';
+    socket.setTimeout(15000);
+    socket.on('connect', () => {
+      socket.write('zINSTREAM\0');
+      const size = Buffer.alloc(4);
+      size.writeUInt32BE(buffer.length, 0);
+      socket.write(Buffer.concat([size, Buffer.from(buffer)]));
+      const terminator = Buffer.alloc(4); // zero-length chunk ends the stream
+      socket.write(terminator);
+    });
+    socket.on('data', (chunk) => { response += chunk.toString(); });
+    socket.on('timeout', () => { socket.destroy(); reject(new Error('clamd scan timed out')); });
+    socket.on('error', reject);
+    socket.on('end', () => {
+      const found = response.match(/stream:\s+(.+)\s+FOUND/);
+      resolve({ clean: /stream:\s+OK/.test(response), engine: 'clamav', signature: found ? found[1] : null });
+    });
+  });
+}
+
+// --- Firebase custom token (Phase 4 realtime) -----------------------------
+// Mints a Firebase Auth custom token (RS256, signed with the service-account key)
+// carrying uid + role claims, so Firebase security rules can enforce access. Returns
+// null when Firebase is not configured (endpoint then responds 503). No SDK needed.
+export function mintFirebaseCustomToken(uid, additionalClaims, config) {
+  if (!config.firebaseClientEmail || !config.firebasePrivateKey) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    iss: config.firebaseClientEmail,
+    sub: config.firebaseClientEmail,
+    aud: 'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',
+    iat: now,
+    exp: now + 3600,
+    uid,
+    claims: additionalClaims || {},
+  })).toString('base64url');
+  const signature = crypto.sign('RSA-SHA256', Buffer.from(`${header}.${payload}`), config.firebasePrivateKey).toString('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+// --- Time-limited TURN credentials (Phase 5 WebRTC) -----------------------
+// coturn "use-auth-secret" scheme: username = <expiry-unixtime>, password = base64(HMAC-SHA1(secret, username)).
+// Returns null when TURN is not configured.
+export function makeTurnCredentials(config, ttlSeconds = 3600) {
+  if (!config.turnSecret || config.turnUrls.length === 0) return null;
+  const username = String(Math.floor(Date.now() / 1000) + ttlSeconds);
+  const credential = crypto.createHmac('sha1', config.turnSecret).update(username).digest('base64');
+  return { username, credential, ttl: ttlSeconds, urls: config.turnUrls };
 }

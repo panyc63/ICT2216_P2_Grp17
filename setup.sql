@@ -5,6 +5,7 @@ DROP TRIGGER IF EXISTS prevent_security_audit_logs_update;
 DROP TRIGGER IF EXISTS prevent_security_audit_logs_delete;
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS recording_sessions;
 DROP TABLE IF EXISTS message_attachments;
 DROP TABLE IF EXISTS chat_messages;
 DROP TABLE IF EXISTS prescriptions;
@@ -163,10 +164,24 @@ CREATE TABLE message_attachments (
     filename VARCHAR(160) NOT NULL,
     mime_type VARCHAR(100) NOT NULL,
     size_bytes INT NOT NULL,
-    malware_scan_status ENUM('PASSED_STUB', 'FAILED', 'PENDING') NOT NULL,
+    malware_scan_status ENUM('PASSED_STUB', 'PASSED', 'FAILED', 'PENDING') NOT NULL,
+    storage_path VARCHAR(255) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE RESTRICT,
     FOREIGN KEY (uploader_id) REFERENCES users(user_id) ON DELETE RESTRICT
+);
+
+-- Audit-ready video consultation recording metadata (Phase 5). No media is stored;
+-- only consent + session metadata for accountability/dispute resolution.
+CREATE TABLE recording_sessions (
+    recording_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    consultation_id VARCHAR(36) NOT NULL,
+    started_by VARCHAR(36) NOT NULL,
+    patient_consent BOOLEAN NOT NULL DEFAULT FALSE,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ended_at TIMESTAMP NULL DEFAULT NULL,
+    FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE RESTRICT,
+    FOREIGN KEY (started_by) REFERENCES users(user_id) ON DELETE RESTRICT
 );
 
 CREATE TABLE security_audit_logs (

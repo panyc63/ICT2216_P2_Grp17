@@ -361,12 +361,70 @@ test('MC is signed with the doctor key and publicly verifiable; tamper fails', a
   assert.equal(body.valid, true);
   assert.equal('diagnosis' in body, false);
 
-  // A tampered token must fail signature verification.
-  const tampered = await api(`/api/verify/mc/${verificationToken.slice(0, -2)}AA`);
+  // A tampered token must fail (different hash -> no match, or bad signature).
+  const tampered = await api(`/api/verify/mc/${verificationToken}x`);
   assert.ok([400, 404].includes(tampered.status));
 
   // The doctor now has a stored public key (private key is encrypted at rest).
   const [rows] = await db.execute('SELECT mc_public_key, mc_private_key_encrypted FROM users WHERE user_id = ?', [SEED_DOCTOR.user_id]);
   assert.ok(rows[0].mc_public_key.includes('BEGIN PUBLIC KEY'));
   assert.equal(rows[0].mc_private_key_encrypted.startsWith('v1:'), true);
+});
+
+// --- Phase 4/5: secure uploads, realtime + WebRTC feature flags -----------
+async function uploadFile(consultationId, session, csrf, bytes, name, type) {
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type }), name);
+  return fetch(`${BASE_URL}/api/consultations/${consultationId}/attachments/upload`, {
+    method: 'POST',
+    headers: { Cookie: `mf_session=${session}; mf_csrf=${csrf}`, 'X-CSRF-Token': csrf },
+    body: form,
+  });
+}
+
+test('upload: clean file is scanned, stored, and downloadable only by participants', async () => {
+  const session = mintSession(SEED_PATIENT); // patient of MH-C001
+  const csrf = await getCsrf();
+  const res = await uploadFile('MH-C001', session, csrf, Buffer.from('hello world'), 'rash.png', 'image/png');
+  assert.equal(res.status, 201);
+  const { attachmentId } = await res.json();
+
+  const ok = await api(`/api/attachments/${attachmentId}`, { session });
+  assert.equal(ok.status, 200);
+
+  // A fresh, active patient who is not a participant must be denied (object-level authz).
+  await db.execute(
+    `INSERT INTO users (user_id, name, email, password_hash, role, is_verified, status, token_version)
+     VALUES ('MH-ITEST2', 'Intruder Patient', 'itest2@example.com', 'scrypt$16384$8$1$x$bm9o', 'Patient', TRUE, 'Active', 0)
+     ON DUPLICATE KEY UPDATE status='Active', token_version=0`
+  );
+  const intruderSession = mintSession({ user_id: 'MH-ITEST2', email: 'itest2@example.com', role: 'Patient', token_version: 0 });
+  const intruder = await api(`/api/attachments/${attachmentId}`, { session: intruderSession });
+  assert.equal(intruder.status, 403);
+  await db.execute("DELETE FROM users WHERE user_id = 'MH-ITEST2'").catch(() => {});
+});
+
+test('upload: a file containing the EICAR signature is blocked (422)', async () => {
+  const session = mintSession(SEED_PATIENT);
+  const csrf = await getCsrf();
+  const eicar = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
+  const res = await uploadFile('MH-C001', session, csrf, Buffer.from(eicar), 'rash.png', 'image/png');
+  assert.equal(res.status, 422);
+});
+
+test('realtime + WebRTC endpoints return 503 when integrations are unconfigured', async () => {
+  const session = mintSession(SEED_PATIENT);
+  const csrf = await getCsrf();
+  assert.equal((await api('/api/realtime/token', { method: 'POST', session, csrf })).status, 503);
+  assert.equal((await api('/api/consultations/MH-C001/rtc-credentials', { session })).status, 503);
+});
+
+test('recording is doctor-gated and requires patient consent', async () => {
+  const doctor = mintSession(SEED_DOCTOR);
+  const csrf = await getCsrf();
+  // Patient cannot start a recording (RBAC).
+  assert.equal((await api('/api/consultations/MH-C001/recording', { method: 'POST', session: mintSession(SEED_PATIENT), csrf, body: { consent: true } })).status, 403);
+  // Doctor without consent -> 400; with consent -> 201.
+  assert.equal((await api('/api/consultations/MH-C001/recording', { method: 'POST', session: doctor, csrf, body: { consent: false } })).status, 400);
+  assert.equal((await api('/api/consultations/MH-C001/recording', { method: 'POST', session: doctor, csrf, body: { consent: true } })).status, 201);
 });

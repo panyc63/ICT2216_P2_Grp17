@@ -1,0 +1,45 @@
+{
+  "//": "MediFlow Firebase Realtime Database security rules (Deliverable 1, Phase 4). Clients authenticate with a custom token minted by POST /api/realtime/token (uid + role claim). Deploy with: firebase deploy --only database",
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "active_queues": {
+      ".read": "auth != null && (auth.token.role === 'Nurse' || auth.token.role === 'Doctor' || auth.token.role === 'Admin')",
+      "$queue_id": {
+        ".write": "auth != null && (auth.token.role === 'Nurse' || auth.token.role === 'Admin')",
+        ".validate": "newData.hasChildren(['patient_id', 'priority_score', 'timestamp'])",
+        "patient_id": { ".validate": "newData.isString()" },
+        "priority_score": { ".validate": "newData.isNumber()" },
+        "timestamp": { ".validate": "newData.isNumber()" }
+      }
+    },
+
+    "live_chats": {
+      "$consultation_id": {
+        ".read": "auth != null && (root.child('consultation_members').child($consultation_id).child(auth.uid).exists() || auth.token.role === 'Admin')",
+        "$message_id": {
+          ".write": "auth != null && !data.exists() && newData.child('sender_id').val() === auth.uid",
+          ".validate": "newData.hasChildren(['sender_id', 'message_body', 'sent_at'])",
+          "sender_id": { ".validate": "newData.val() === auth.uid" },
+          "message_body": { ".validate": "newData.isString() && newData.val().length <= 4096" },
+          "sent_at": { ".validate": "newData.isNumber()" }
+        }
+      }
+    },
+
+    "signaling": {
+      "$consultation_id": {
+        ".read": "auth != null && root.child('consultation_members').child($consultation_id).child(auth.uid).exists()",
+        ".write": "auth != null && root.child('consultation_members').child($consultation_id).child(auth.uid).exists()"
+      }
+    },
+
+    "consultation_members": {
+      "$consultation_id": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    }
+  }
+}
