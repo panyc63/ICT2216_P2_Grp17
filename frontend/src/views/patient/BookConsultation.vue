@@ -34,9 +34,10 @@
       >
         Confirm Booking
       </button>
-      <p v-if="confirmed && selectedSlot" class="text-sm font-medium text-emerald-600">
-        Booked: {{ selectedSlot.date }} at {{ selectedSlot.time }} with {{ selectedSlot.doctor }}.
+      <p v-if="confirmed && bookedRef" class="text-sm font-medium text-emerald-600">
+        Booked ({{ bookedRef }}) — status: {{ bookedStatus }}. A doctor will pick up your consultation shortly.
       </p>
+      <p v-if="error" class="text-sm font-medium text-red-600">{{ error }}</p>
     </div>
   </div>
 </template>
@@ -44,6 +45,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { patientStore } from '../../store/patientStore'
+import { apiFetch } from '../../services/api'
 
 const slots = ref([
   { id: 1, date: 'Mon, 22 Jun', time: '09:00 AM', doctor: 'Dr. John Doe', available: true },
@@ -55,6 +57,9 @@ const slots = ref([
 ])
 
 const confirmed = ref(false)
+const bookedRef = ref('')
+const bookedStatus = ref('')
+const error = ref('')
 
 // selectedSlotId lives in the shared store so the choice survives navigation.
 const selectedSlotId = computed(() => patientStore.booking.selectedSlotId)
@@ -66,8 +71,16 @@ const selectSlot = (slot) => {
   confirmed.value = false
 }
 
-const confirmBooking = () => {
+const confirmBooking = async () => {
   if (selectedSlotId.value === null) return
-  confirmed.value = true
+  error.value = ''
+  try {
+    const res = await apiFetch('/consultations', { method: 'POST', body: JSON.stringify({}) })
+    bookedRef.value = res.consultationId
+    bookedStatus.value = res.status
+    confirmed.value = true
+  } catch (err) {
+    error.value = err.message || 'Could not book the consultation.'
+  }
 }
 </script>

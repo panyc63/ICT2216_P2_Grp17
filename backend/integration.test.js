@@ -243,3 +243,49 @@ test('self-deactivation soft-deletes and revokes sessions but keeps the record',
   assert.notEqual(rows[0].deleted_at, null);        // retention timestamp set
   assert.equal(rows[0].token_version > 0, true);    // old sessions revoked
 });
+
+// --- Phase 2: Consultation booking + lifecycle ----------------------------
+const SEED_DOCTOR = { user_id: 'MH-U002', email: 'doctor@mediflow.com', role: 'Doctor', token_version: 0 };
+
+test('consultation lifecycle: patient books, doctor claims/starts/completes', async () => {
+  const patient = mintSession(SEED_PATIENT);
+  const doctor = mintSession(SEED_DOCTOR);
+  const csrf = await getCsrf();
+
+  const booked = await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} });
+  assert.equal(booked.status, 201);
+  const { consultationId } = await booked.json();
+
+  const mine = await (await api('/api/consultations', { session: patient })).json();
+  assert.equal(mine.some((c) => c.consultation_id === consultationId), true);
+
+  // RBAC: a patient cannot drive the clinical state machine.
+  const patientPatch = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: patient, csrf, body: { action: 'start' } });
+  assert.equal(patientPatch.status, 403);
+
+  for (const action of ['claim', 'start', 'complete']) {
+    const r = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action } });
+    assert.equal(r.status, 200);
+  }
+  const [rows] = await db.execute('SELECT doctor_id, session_status FROM consultations WHERE consultation_id = ?', [consultationId]);
+  assert.equal(rows[0].doctor_id, SEED_DOCTOR.user_id);
+  assert.equal(rows[0].session_status, 'Completed');
+});
+
+test('object-level: a doctor cannot act on a consultation assigned to another doctor', async () => {
+  await db.execute(
+    `INSERT INTO users (user_id, name, email, password_hash, role, is_verified, status, token_version)
+     VALUES ('MH-DTEST', 'Other Doctor', 'other-doc@example.com', 'scrypt$16384$8$1$x$bm9o', 'Doctor', TRUE, 'Active', 0)
+     ON DUPLICATE KEY UPDATE status='Active', token_version=0`
+  );
+  const patient = mintSession(SEED_PATIENT);
+  const owner = mintSession(SEED_DOCTOR);
+  const intruder = mintSession({ user_id: 'MH-DTEST', email: 'other-doc@example.com', role: 'Doctor', token_version: 0 });
+  const csrf = await getCsrf();
+
+  const { consultationId } = await (await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} })).json();
+  await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: owner, csrf, body: { action: 'claim' } });
+  // A different doctor must not be able to start it.
+  const intruderStart = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: intruder, csrf, body: { action: 'start' } });
+  assert.equal(intruderStart.status, 403);
+});

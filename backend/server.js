@@ -127,6 +127,10 @@ app.post('/api/staff', asyncHandler(authenticate), requireRole('Admin'), require
 app.patch('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(updateStaff));
 app.delete('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(deactivateStaff));
 
+app.post('/api/consultations', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(bookConsultation));
+app.get('/api/consultations', asyncHandler(authenticate), asyncHandler(listConsultations));
+app.patch('/api/consultations/:id', asyncHandler(authenticate), requireRole('Doctor', 'Nurse', 'Admin'), asyncHandler(updateConsultation));
+
 app.post('/api/triage', triageLimit, asyncHandler(authenticate), requireRole('Patient'), asyncHandler(submitTriage));
 app.get('/api/nurse/queue', asyncHandler(authenticate), requireRole('Nurse', 'Doctor', 'Admin'), asyncHandler(listQueue));
 app.patch('/api/nurse/queue/:id', asyncHandler(authenticate), requireRole('Nurse', 'Admin'), asyncHandler(updateQueue));
@@ -669,6 +673,81 @@ async function deactivateStaff(req, res) {
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'DEACTIVATE_STAFF', resourceType: 'USER', resourceId: userId, outcome: 'SUCCESS' });
   res.status(200).json({ message: 'Staff account deactivated.' });
+}
+
+async function bookConsultation(req, res) {
+  const consultationId = `MH-C-${Date.now()}`;
+  await execute(
+    "INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status) VALUES (?, ?, NULL, 'Pending')",
+    [consultationId, req.user.user_id]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'BOOK_CONSULTATION', resourceType: 'CONSULTATION', resourceId: consultationId, outcome: 'SUCCESS' });
+  res.status(201).json({ consultationId, status: 'Pending' });
+}
+
+async function listConsultations(req, res) {
+  let rows;
+  if (req.user.role === 'Patient') {
+    rows = await query(
+      `SELECT c.consultation_id, c.session_status, c.created_at, c.completed_at, d.name AS doctor_name
+       FROM consultations c LEFT JOIN users d ON d.user_id = c.doctor_id
+       WHERE c.patient_id = ? ORDER BY c.created_at DESC`,
+      [req.user.user_id]
+    );
+  } else if (req.user.role === 'Doctor') {
+    // Assigned to me, plus the unclaimed pending pool.
+    rows = await query(
+      `SELECT c.consultation_id, c.patient_id, p.name AS patient_name, c.doctor_id, c.session_status, c.created_at
+       FROM consultations c JOIN users p ON p.user_id = c.patient_id
+       WHERE c.doctor_id = ? OR (c.doctor_id IS NULL AND c.session_status = 'Pending')
+       ORDER BY FIELD(c.session_status, 'Active', 'Pending', 'Completed'), c.created_at`,
+      [req.user.user_id]
+    );
+  } else {
+    // Nurse / Admin: active workload.
+    rows = await query(
+      `SELECT c.consultation_id, c.patient_id, p.name AS patient_name, c.doctor_id, d.name AS doctor_name, c.session_status, c.created_at
+       FROM consultations c JOIN users p ON p.user_id = c.patient_id LEFT JOIN users d ON d.user_id = c.doctor_id
+       WHERE c.session_status IN ('Pending', 'Active') ORDER BY c.created_at`
+    );
+  }
+  res.status(200).json(rows);
+}
+
+async function updateConsultation(req, res) {
+  const id = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
+  const action = assertEnum(req.body.action, 'action', ['claim', 'assign', 'start', 'complete', 'cancel']);
+  const rows = await query('SELECT * FROM consultations WHERE consultation_id = ? LIMIT 1', [id]);
+  const consultation = rows[0];
+  if (!consultation) throw notFound('Consultation not found.');
+
+  // Doctors may only act on consultations assigned to them (except claiming a free one).
+  const isOwningDoctor = req.user.role === 'Doctor' && consultation.doctor_id === req.user.user_id;
+
+  if (action === 'claim') {
+    if (req.user.role !== 'Doctor') throw forbidden('Only doctors can claim a consultation.');
+    if (consultation.session_status !== 'Pending' || consultation.doctor_id) throw badRequest('Consultation is not available to claim.');
+    await execute("UPDATE consultations SET doctor_id = ? WHERE consultation_id = ? AND doctor_id IS NULL", [req.user.user_id, id]);
+  } else if (action === 'assign') {
+    if (!['Nurse', 'Admin'].includes(req.user.role)) throw forbidden();
+    const doctorId = assertString(req.body.doctorId, 'doctorId', { min: 4, max: 36 });
+    await execute("UPDATE consultations SET doctor_id = ? WHERE consultation_id = ?", [doctorId, id]);
+  } else if (action === 'start') {
+    if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
+    if (consultation.session_status !== 'Pending') throw badRequest('Only a pending consultation can start.');
+    await execute("UPDATE consultations SET session_status = 'Active' WHERE consultation_id = ?", [id]);
+  } else if (action === 'complete') {
+    if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
+    if (consultation.session_status !== 'Active') throw badRequest('Only an active consultation can be completed.');
+    await execute("UPDATE consultations SET session_status = 'Completed', completed_at = CURRENT_TIMESTAMP WHERE consultation_id = ?", [id]);
+  } else if (action === 'cancel') {
+    if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
+    if (consultation.session_status === 'Completed') throw badRequest('Completed consultations cannot be cancelled.');
+    await execute("UPDATE consultations SET session_status = 'Cancelled' WHERE consultation_id = ?", [id]);
+  }
+
+  await writeAudit(req, { actorId: req.user.user_id, action: `CONSULTATION_${action.toUpperCase()}`, resourceType: 'CONSULTATION', resourceId: id, outcome: 'SUCCESS' });
+  res.status(200).json({ message: `Consultation ${action} successful.` });
 }
 
 function triagePriority(answers) {
