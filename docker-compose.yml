@@ -1,0 +1,49 @@
+# Local / CI stack for MediFlow.
+# Used for: manual end-to-end runs, the OWASP ZAP DAST job, and container builds.
+# NOTE: the secrets below are throwaway values for local/CI ONLY. Never reuse in production.
+services:
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: mediflow_db
+    volumes:
+      - ./setup.sql:/docker-entrypoint-initdb.d/01-setup.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "3306:3306"
+
+  backend:
+    build: ./backend
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      DB_HOST: db
+      DB_USER: root
+      DB_PASSWORD: rootpass
+      DB_NAME: mediflow_db
+      FRONTEND_URL: http://localhost:8080
+      BACKEND_PUBLIC_URL: http://localhost:5000
+      CORS_ORIGINS: http://localhost:8080
+      JWT_SECRET: ci-only-jwt-secret-change-me-32-bytes-minimum
+      CSRF_SECRET: ci-only-csrf-secret-change-me-32-bytes-minimum
+      DATA_ENCRYPTION_KEY: ci-only-data-encryption-key-32-bytes-minimum
+      MC_SIGNING_KEY: ci-only-mc-signing-key-32-bytes-minimum-ok
+      STRIPE_WEBHOOK_SECRET: whsec_ci_only_test_secret
+      MFA_REQUIRED_ROLES: "Admin,Doctor,Nurse,Pharmacist"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:8080"

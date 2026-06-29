@@ -1,0 +1,64 @@
+# Custom Semgrep rules for MediFlow, mapped to the Deliverable 1 security
+# requirements and OWASP Top 10. These run alongside the published rulesets
+# (p/owasp-top-ten, p/security-audit, p/javascript) in semgrep.yml.
+rules:
+  - id: mediflow-insecure-randomness
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      Math.random() is not cryptographically secure. Use crypto.randomInt /
+      crypto.randomBytes for OTPs, tokens, IDs and any security-sensitive value.
+      (OWASP Top 10 A02 Cryptographic Failures; ASVS V6 Stored Cryptography.)
+    patterns:
+      - pattern: Math.random()
+    metadata:
+      owasp: "A02:2021 Cryptographic Failures"
+      asvs: "V6"
+      references:
+        - https://owasp.org/Top10/A02_2021-Cryptographic_Failures/
+
+  - id: mediflow-raw-sql-string-concat
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      Possible SQL injection: this query is built with string concatenation.
+      Use parameterised placeholders ('?') with a values array instead.
+      (OWASP Top 10 A03 Injection; ASVS V5 Validation, Sanitization & Encoding.)
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query("..." + ...)
+          - pattern: $DB.execute("..." + ...)
+    metadata:
+      owasp: "A03:2021 Injection"
+      asvs: "V5"
+
+  - id: mediflow-dynamic-sql-template-literal
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      Query built from a template literal with interpolation. Ensure only
+      trusted, hard-coded column/clause fragments are interpolated and that all
+      user-supplied VALUES are passed as parameters ('?'). Review for injection.
+      (OWASP Top 10 A03 Injection.)
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query(`...`)
+          - pattern: $DB.execute(`...`)
+    metadata:
+      owasp: "A03:2021 Injection"
+      asvs: "V5"
+
+  - id: mediflow-trust-client-financial-status
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      Do not trust client-supplied payment/prescription/MC status. Verify
+      server-side (Stripe webhook signature + DB state), never from req.body.
+      (Deliverable 1: Secure Payment Verification; OWASP A08 Integrity Failures.)
+    patterns:
+      - pattern-either:
+          - pattern: req.body.status == "Paid"
+          - pattern: req.body.status === "Paid"
+          - pattern: req.body.paymentStatus
+    metadata:
+      owasp: "A08:2021 Software and Data Integrity Failures"

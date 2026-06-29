@@ -1,0 +1,16 @@
+# Code owners for MediFlow.
+# Owners are automatically requested for review on matching paths. Combined with
+# branch protection requiring review, this enforces four-eyes on security-critical
+# code (NIST SSDF PW.7, OWASP SAMM Code Review).
+#
+# NOTE: add your teammates' GitHub handles below so reviews are shared across the team.
+
+# Default owner for everything.
+*                       @favleo
+
+# Security-critical code requires explicit review.
+/backend/security.js    @favleo
+/backend/server.js      @favleo
+/setup.sql              @favleo
+/.github/               @favleo
+/.semgrep/              @favleo
