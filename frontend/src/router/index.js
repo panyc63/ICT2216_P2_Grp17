@@ -3,6 +3,7 @@ import Home from '../views/Home.vue'
 import Login from '../views/login.vue'
 import Register from '../views/register.vue'
 import ForgetPassword from '../views/forgetPassword.vue'
+import ResetPassword from '../views/resetPassword.vue'
 import AboutUs from '../views/aboutUs.vue'
 import Services from '../views/services.vue'
 import ContactUs from '../views/contactUs.vue'
@@ -33,6 +34,7 @@ const routes = [
   { path: '/login', name: 'Login', component: Login },
   { path: '/register', name: 'Register', component: Register },
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
+  { path: '/reset-password', name: 'ResetPassword', component: ResetPassword },
   { path: '/about', name: 'AboutUs', component: AboutUs },
   { path: '/services', name: 'Services', component: Services },
   { path: '/contact', name: 'ContactUs', component: ContactUs },

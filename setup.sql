@@ -32,6 +32,13 @@ CREATE TABLE users (
     mfa_expires_at TIMESTAMP NULL DEFAULT NULL,
     failed_login_count INT NOT NULL DEFAULT 0,
     locked_until TIMESTAMP NULL DEFAULT NULL,
+    -- Self-service profile (PHI fields are encrypted at the application layer)
+    phone VARCHAR(30) NULL,
+    address_encrypted TEXT NULL,
+    nric_encrypted TEXT NULL,
+    -- Password-reset (hashed, single-use, time-limited token)
+    reset_token_hash VARCHAR(64) NULL,
+    reset_expires_at TIMESTAMP NULL DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login TIMESTAMP NULL DEFAULT NULL,
     deleted_at TIMESTAMP NULL DEFAULT NULL,

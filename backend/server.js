@@ -114,6 +114,14 @@ app.post('/api/logout', asyncHandler(authenticate), asyncHandler(logout));
 app.get('/api/me', asyncHandler(authenticate), asyncHandler(me));
 app.post('/api/auth/reauth', loginLimit, asyncHandler(authenticate), asyncHandler(reauthenticate));
 
+// Account self-service (Deliverable 1: Account Management - Read/Update/Delete)
+app.get('/api/me/profile', asyncHandler(authenticate), asyncHandler(getMyProfile));
+app.patch('/api/me/profile', asyncHandler(authenticate), asyncHandler(updateMyProfile));
+app.post('/api/me/password', asyncHandler(authenticate), requireRecentReauth, asyncHandler(changeMyPassword));
+app.delete('/api/me', asyncHandler(authenticate), requireRecentReauth, asyncHandler(deleteMyAccount));
+app.post('/api/forgot-password', authLimit, asyncHandler(requestPasswordReset));
+app.post('/api/reset-password', authLimit, asyncHandler(resetPassword));
+
 app.get('/api/staff', asyncHandler(authenticate), requireRole('Admin'), asyncHandler(listStaff));
 app.post('/api/staff', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(createStaff));
 app.patch('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(updateStaff));
@@ -495,6 +503,116 @@ async function reauthenticate(req, res) {
   await execute('UPDATE users SET mfa_challenge_id = NULL, mfa_otp_hash = NULL, mfa_expires_at = NULL WHERE user_id = ?', [user.user_id]);
   await writeAudit(req, { actorId: user.user_id, action: 'REAUTH', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
   res.status(200).json({ message: 'Re-authentication successful.', ...issueSession(res, user, { reauth_at: now, mfa_at: now }) });
+}
+
+async function getMyProfile(req, res) {
+  const user = await getUserById(req.user.user_id);
+  if (!user) throw notFound('Account not found.');
+  res.status(200).json({
+    user_id: user.user_id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    phone: user.phone || '',
+    address: decryptText(user.address_encrypted, config) || '',
+    nric: decryptText(user.nric_encrypted, config) || '',
+  });
+}
+
+async function updateMyProfile(req, res) {
+  const fields = [];
+  const params = [];
+  if (req.body.name !== undefined) {
+    fields.push('name = ?');
+    params.push(assertString(req.body.name, 'name', { min: 2, max: 120 }));
+  }
+  if (req.body.phone !== undefined) {
+    fields.push('phone = ?');
+    params.push(assertOptionalString(req.body.phone, 'phone', { min: 3, max: 30, pattern: /^[+0-9 ()-]+$/ }));
+  }
+  if (req.body.address !== undefined) {
+    const address = assertOptionalString(req.body.address, 'address', { min: 0, max: 300 });
+    fields.push('address_encrypted = ?');
+    params.push(address ? encryptText(address, config) : null);
+  }
+  if (req.body.nric !== undefined) {
+    const nric = assertOptionalString(req.body.nric, 'nric', { min: 0, max: 20, pattern: /^[A-Za-z0-9]*$/ });
+    fields.push('nric_encrypted = ?');
+    params.push(nric ? encryptText(nric, config) : null);
+  }
+  if (fields.length === 0) throw badRequest('No supported profile fields supplied.');
+  params.push(req.user.user_id);
+  await execute(`UPDATE users SET ${fields.join(', ')} WHERE user_id = ?`, params);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'UPDATE_PROFILE', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ message: 'Profile updated.' });
+}
+
+async function changeMyPassword(req, res) {
+  const currentPassword = assertString(req.body.currentPassword, 'currentPassword', { min: 1, max: 128 });
+  const newPassword = assertPassword(req.body.newPassword);
+  const user = await getUserById(req.user.user_id);
+  if (!user || !(await verifyPassword(currentPassword, user.password_hash))) {
+    await writeAudit(req, { actorId: req.user.user_id, action: 'CHANGE_PASSWORD', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'FAILURE' });
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+  // Rotate the password and revoke all existing sessions via token_version bump.
+  await execute('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE user_id = ?', [await hashPassword(newPassword), user.user_id]);
+  await writeAudit(req, { actorId: user.user_id, action: 'CHANGE_PASSWORD', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
+  clearSessionCookie(res, config);
+  res.status(200).json({ message: 'Password changed. Please sign in again.' });
+}
+
+async function deleteMyAccount(req, res) {
+  // Soft delete: deactivate but RETAIN medical/audit records (retention override).
+  await execute(
+    "UPDATE users SET status = 'Deactivated', deleted_at = CURRENT_TIMESTAMP, token_version = token_version + 1 WHERE user_id = ?",
+    [req.user.user_id]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'DELETE_ACCOUNT', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  clearSessionCookie(res, config);
+  res.status(200).json({ message: 'Account deactivated. Medical records are retained per policy.' });
+}
+
+async function requestPasswordReset(req, res) {
+  const email = assertEmail(req.body.email);
+  const user = await getUserByEmail(email);
+  // Always respond 200 to avoid account enumeration.
+  if (user && user.status === 'Active') {
+    const token = randomToken();
+    await execute(
+      'UPDATE users SET reset_token_hash = ?, reset_expires_at = DATE_ADD(NOW(), INTERVAL 30 MINUTE) WHERE user_id = ?',
+      [hashToken(token), user.user_id]
+    );
+    const resetUrl = `${config.frontendUrl}/reset-password?token=${token}`;
+    await sendMail({
+      to: email,
+      subject: 'Reset your MediFlow password',
+      html: `<p>A password reset was requested for your account.</p><p><a href="${resetUrl}">Reset your password</a> (valid for 30 minutes).</p><p>If you did not request this, you can ignore this email.</p>`,
+    });
+    await writeAudit(req, { actorId: user.user_id, action: 'FORGOT_PASSWORD', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
+  } else {
+    await writeAudit(req, { action: 'FORGOT_PASSWORD', resourceType: 'USER', outcome: 'FAILURE', metadata: { email } });
+  }
+  res.status(200).json({ message: 'If an account exists for that email, a reset link has been sent.' });
+}
+
+async function resetPassword(req, res) {
+  const token = assertString(req.body.token, 'token', { min: 20, max: 200 });
+  const newPassword = assertPassword(req.body.password);
+  const rows = await query(
+    "SELECT user_id FROM users WHERE reset_token_hash = ? AND reset_expires_at > NOW() AND status = 'Active' LIMIT 1",
+    [hashToken(token)]
+  );
+  if (!rows[0]) {
+    await writeAudit(req, { action: 'RESET_PASSWORD', resourceType: 'USER', outcome: 'FAILURE' });
+    return res.status(400).json({ error: 'Invalid or expired reset token.' });
+  }
+  await execute(
+    'UPDATE users SET password_hash = ?, reset_token_hash = NULL, reset_expires_at = NULL, token_version = token_version + 1 WHERE user_id = ?',
+    [await hashPassword(newPassword), rows[0].user_id]
+  );
+  await writeAudit(req, { actorId: rows[0].user_id, action: 'RESET_PASSWORD', resourceType: 'USER', resourceId: rows[0].user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ message: 'Password reset successful. Please sign in.' });
 }
 
 async function listStaff(_req, res) {

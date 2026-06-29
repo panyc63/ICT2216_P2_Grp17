@@ -13,7 +13,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import mysql from 'mysql2/promise';
-import { signJwt, sessionPayload } from './security.js';
+import { signJwt, sessionPayload, hashToken } from './security.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const JWT_SECRET = process.env.JWT_SECRET || 'ci-only-jwt-secret-change-me-32-bytes-minimum';
@@ -180,4 +180,66 @@ test('public MC verification returns minimal data and no PHI', async () => {
   // Must never leak diagnosis / patient identifiers on the public endpoint.
   assert.equal('diagnosis' in body, false);
   assert.equal('patient_id' in body, false);
+});
+
+// --- Phase 1: Account management self-service -----------------------------
+test('profile read/update encrypts PHI at rest and round-trips', async () => {
+  const session = mintSession(SEED_PATIENT);
+  const csrf = await getCsrf();
+  const upd = await api('/api/me/profile', {
+    method: 'PATCH', session, csrf,
+    body: { phone: '+65 8000 0001', address: '1 Test Avenue' },
+  });
+  assert.equal(upd.status, 200);
+
+  const get = await api('/api/me/profile', { session });
+  const body = await get.json();
+  assert.equal(body.phone, '+65 8000 0001');
+  assert.equal(body.address, '1 Test Avenue');
+
+  // Stored value must be ciphertext, not plaintext.
+  const [rows] = await db.execute('SELECT address_encrypted FROM users WHERE user_id = ?', [SEED_PATIENT.user_id]);
+  assert.equal(rows[0].address_encrypted.startsWith('v1:'), true);
+  assert.equal(rows[0].address_encrypted.includes('Test Avenue'), false);
+});
+
+test('forgot-password does not enumerate accounts', async () => {
+  const csrf = await getCsrf();
+  const real = await api('/api/forgot-password', { method: 'POST', csrf, body: { email: 'john@gmail.com' } });
+  const fake = await api('/api/forgot-password', { method: 'POST', csrf, body: { email: 'nobody-here@example.com' } });
+  assert.equal(real.status, 200);
+  assert.equal(fake.status, 200);
+  assert.deepEqual(await real.json(), await fake.json()); // identical response
+});
+
+test('reset-password accepts a valid token and rejects a bad one', async () => {
+  const csrf = await getCsrf();
+  // Bad token -> 400.
+  const bad = await api('/api/reset-password', { method: 'POST', csrf, body: { token: 'z'.repeat(40), password: 'BrandNew123!' } });
+  assert.equal(bad.status, 400);
+
+  // Plant a known token hash for the test patient, then reset.
+  const token = 'integration-reset-token-1234567890';
+  await db.execute(
+    'UPDATE users SET reset_token_hash = ?, reset_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE user_id = ?',
+    [hashToken(token), TEST_PATIENT.user_id]
+  );
+  const ok = await api('/api/reset-password', { method: 'POST', csrf, body: { token, password: 'BrandNew123!' } });
+  assert.equal(ok.status, 200);
+  // Token is single-use: it must be cleared after success.
+  const [rows] = await db.execute('SELECT reset_token_hash FROM users WHERE user_id = ?', [TEST_PATIENT.user_id]);
+  assert.equal(rows[0].reset_token_hash, null);
+});
+
+test('self-deactivation soft-deletes and revokes sessions but keeps the record', async () => {
+  // Re-read token_version: earlier tests (e.g. reset-password) may have bumped it.
+  const [cur] = await db.execute('SELECT token_version FROM users WHERE user_id = ?', [TEST_PATIENT.user_id]);
+  const session = mintSession({ ...TEST_PATIENT, token_version: cur[0].token_version });
+  const csrf = await getCsrf();
+  const res = await api('/api/me', { method: 'DELETE', session, csrf });
+  assert.equal(res.status, 200);
+  const [rows] = await db.execute('SELECT status, deleted_at, token_version FROM users WHERE user_id = ?', [TEST_PATIENT.user_id]);
+  assert.equal(rows[0].status, 'Deactivated');     // soft-deleted
+  assert.notEqual(rows[0].deleted_at, null);        // retention timestamp set
+  assert.equal(rows[0].token_version > 0, true);    // old sessions revoked
 });
