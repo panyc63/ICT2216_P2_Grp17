@@ -1,0 +1,21 @@
+{
+  "name": "mediflow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MediFlow telehealth platform - repo-level dev tooling (lint/security).",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test:backend": "npm --prefix backend test",
+    "build:frontend": "npm --prefix frontend run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "eslint-plugin-security": "^3.0.1",
+    "eslint-plugin-vue": "^9.32.0",
+    "globals": "^15.14.0",
+    "vue-eslint-parser": "^9.4.3"
+  }
+}

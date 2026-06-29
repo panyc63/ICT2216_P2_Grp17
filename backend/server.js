@@ -3,6 +3,9 @@ import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
+import multer from 'multer';
+import fs from 'fs/promises';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   ROLES,
@@ -41,9 +44,14 @@ import {
   setSessionCookie,
   sha256,
   signJwt,
-  signMcToken,
+  signMcTokenAsym,
+  generateMcKeyPair,
+  decodeMcPayload,
+  verifyMcTokenAsym,
+  scanBufferForMalware,
+  mintFirebaseCustomToken,
+  makeTurnCredentials,
   verifyJwt,
-  verifyMcToken,
   verifyPassword,
 } from './security.js';
 
@@ -82,6 +90,9 @@ const chatLimit = rateLimit({ windowMs: 60 * 1000, max: 30, keyPrefix: 'chat' })
 const paymentLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'payment' });
 const verificationLimit = rateLimit({ windowMs: 60 * 1000, max: 20, keyPrefix: 'mc-verify' });
 
+// In-memory upload (max 5 MB) so the buffer can be malware-scanned before it ever touches disk.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
 app.use(applySecurityHeaders(config));
 app.use(applyCors(config));
 app.use(parseCookies);
@@ -114,10 +125,22 @@ app.post('/api/logout', asyncHandler(authenticate), asyncHandler(logout));
 app.get('/api/me', asyncHandler(authenticate), asyncHandler(me));
 app.post('/api/auth/reauth', loginLimit, asyncHandler(authenticate), asyncHandler(reauthenticate));
 
+// Account self-service (Deliverable 1: Account Management - Read/Update/Delete)
+app.get('/api/me/profile', asyncHandler(authenticate), asyncHandler(getMyProfile));
+app.patch('/api/me/profile', asyncHandler(authenticate), asyncHandler(updateMyProfile));
+app.post('/api/me/password', asyncHandler(authenticate), requireRecentReauth, asyncHandler(changeMyPassword));
+app.delete('/api/me', asyncHandler(authenticate), requireRecentReauth, asyncHandler(deleteMyAccount));
+app.post('/api/forgot-password', authLimit, asyncHandler(requestPasswordReset));
+app.post('/api/reset-password', authLimit, asyncHandler(resetPassword));
+
 app.get('/api/staff', asyncHandler(authenticate), requireRole('Admin'), asyncHandler(listStaff));
 app.post('/api/staff', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(createStaff));
 app.patch('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(updateStaff));
 app.delete('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(deactivateStaff));
+
+app.post('/api/consultations', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(bookConsultation));
+app.get('/api/consultations', asyncHandler(authenticate), asyncHandler(listConsultations));
+app.patch('/api/consultations/:id', asyncHandler(authenticate), requireRole('Doctor', 'Nurse', 'Admin'), asyncHandler(updateConsultation));
 
 app.post('/api/triage', triageLimit, asyncHandler(authenticate), requireRole('Patient'), asyncHandler(submitTriage));
 app.get('/api/nurse/queue', asyncHandler(authenticate), requireRole('Nurse', 'Doctor', 'Admin'), asyncHandler(listQueue));
@@ -128,6 +151,10 @@ app.get('/api/payments/:id', asyncHandler(authenticate), asyncHandler(getPayment
 
 app.post('/api/prescriptions', asyncHandler(authenticate), requireRole('Doctor'), requireRecentReauth, asyncHandler(createPrescription));
 app.get('/api/prescriptions/:id', asyncHandler(authenticate), asyncHandler(getPrescription));
+app.get('/api/inventory', asyncHandler(authenticate), requireRole('Doctor', 'Pharmacist', 'Admin'), asyncHandler(listInventory));
+app.get('/api/pharmacy/queue', asyncHandler(authenticate), requireRole('Pharmacist', 'Admin'), asyncHandler(listPharmacyQueue));
+app.post('/api/prescriptions/:id/fulfil', asyncHandler(authenticate), requireRole('Pharmacist'), requireRecentReauth, asyncHandler(fulfilPrescription));
+app.get('/api/patient/prescriptions', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(listPatientPrescriptions));
 
 app.post('/api/medical-certificates', asyncHandler(authenticate), requireRole('Doctor'), requireRecentReauth, asyncHandler(createMedicalCertificate));
 app.get('/api/medical-certificates/:id', asyncHandler(authenticate), asyncHandler(getMedicalCertificate));
@@ -138,6 +165,15 @@ app.get('/api/verify/mc/:token', verificationLimit, asyncHandler(verifyMedicalCe
 app.get('/api/consultations/:id/messages', chatLimit, asyncHandler(authenticate), asyncHandler(listMessages));
 app.post('/api/consultations/:id/messages', chatLimit, asyncHandler(authenticate), asyncHandler(createMessage));
 app.post('/api/consultations/:id/attachments', chatLimit, asyncHandler(authenticate), asyncHandler(registerAttachment));
+// Secure file upload: malware-scanned (ClamAV, or EICAR stub when not configured) before storage.
+app.post('/api/consultations/:id/attachments/upload', chatLimit, asyncHandler(authenticate), upload.single('file'), asyncHandler(uploadAttachment));
+app.get('/api/attachments/:id', asyncHandler(authenticate), asyncHandler(downloadAttachment));
+
+// Realtime (Phase 4): mint a Firebase custom token (role-claimed) for chat/queue/signaling.
+app.post('/api/realtime/token', asyncHandler(authenticate), asyncHandler(issueRealtimeToken));
+// WebRTC (Phase 5): short-lived TURN credentials + consent-gated recording metadata.
+app.get('/api/consultations/:id/rtc-credentials', asyncHandler(authenticate), asyncHandler(getRtcCredentials));
+app.post('/api/consultations/:id/recording', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), asyncHandler(startRecordingSession));
 
 app.use((err, req, res, _next) => {
   const status = err.status || 500;
@@ -497,6 +533,116 @@ async function reauthenticate(req, res) {
   res.status(200).json({ message: 'Re-authentication successful.', ...issueSession(res, user, { reauth_at: now, mfa_at: now }) });
 }
 
+async function getMyProfile(req, res) {
+  const user = await getUserById(req.user.user_id);
+  if (!user) throw notFound('Account not found.');
+  res.status(200).json({
+    user_id: user.user_id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    phone: user.phone || '',
+    address: decryptText(user.address_encrypted, config) || '',
+    nric: decryptText(user.nric_encrypted, config) || '',
+  });
+}
+
+async function updateMyProfile(req, res) {
+  const fields = [];
+  const params = [];
+  if (req.body.name !== undefined) {
+    fields.push('name = ?');
+    params.push(assertString(req.body.name, 'name', { min: 2, max: 120 }));
+  }
+  if (req.body.phone !== undefined) {
+    fields.push('phone = ?');
+    params.push(assertOptionalString(req.body.phone, 'phone', { min: 3, max: 30, pattern: /^[+0-9 ()-]+$/ }));
+  }
+  if (req.body.address !== undefined) {
+    const address = assertOptionalString(req.body.address, 'address', { min: 0, max: 300 });
+    fields.push('address_encrypted = ?');
+    params.push(address ? encryptText(address, config) : null);
+  }
+  if (req.body.nric !== undefined) {
+    const nric = assertOptionalString(req.body.nric, 'nric', { min: 0, max: 20, pattern: /^[A-Za-z0-9]*$/ });
+    fields.push('nric_encrypted = ?');
+    params.push(nric ? encryptText(nric, config) : null);
+  }
+  if (fields.length === 0) throw badRequest('No supported profile fields supplied.');
+  params.push(req.user.user_id);
+  await execute(`UPDATE users SET ${fields.join(', ')} WHERE user_id = ?`, params);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'UPDATE_PROFILE', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ message: 'Profile updated.' });
+}
+
+async function changeMyPassword(req, res) {
+  const currentPassword = assertString(req.body.currentPassword, 'currentPassword', { min: 1, max: 128 });
+  const newPassword = assertPassword(req.body.newPassword);
+  const user = await getUserById(req.user.user_id);
+  if (!user || !(await verifyPassword(currentPassword, user.password_hash))) {
+    await writeAudit(req, { actorId: req.user.user_id, action: 'CHANGE_PASSWORD', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'FAILURE' });
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+  // Rotate the password and revoke all existing sessions via token_version bump.
+  await execute('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE user_id = ?', [await hashPassword(newPassword), user.user_id]);
+  await writeAudit(req, { actorId: user.user_id, action: 'CHANGE_PASSWORD', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
+  clearSessionCookie(res, config);
+  res.status(200).json({ message: 'Password changed. Please sign in again.' });
+}
+
+async function deleteMyAccount(req, res) {
+  // Soft delete: deactivate but RETAIN medical/audit records (retention override).
+  await execute(
+    "UPDATE users SET status = 'Deactivated', deleted_at = CURRENT_TIMESTAMP, token_version = token_version + 1 WHERE user_id = ?",
+    [req.user.user_id]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'DELETE_ACCOUNT', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  clearSessionCookie(res, config);
+  res.status(200).json({ message: 'Account deactivated. Medical records are retained per policy.' });
+}
+
+async function requestPasswordReset(req, res) {
+  const email = assertEmail(req.body.email);
+  const user = await getUserByEmail(email);
+  // Always respond 200 to avoid account enumeration.
+  if (user && user.status === 'Active') {
+    const token = randomToken();
+    await execute(
+      'UPDATE users SET reset_token_hash = ?, reset_expires_at = DATE_ADD(NOW(), INTERVAL 30 MINUTE) WHERE user_id = ?',
+      [hashToken(token), user.user_id]
+    );
+    const resetUrl = `${config.frontendUrl}/reset-password?token=${token}`;
+    await sendMail({
+      to: email,
+      subject: 'Reset your MediFlow password',
+      html: `<p>A password reset was requested for your account.</p><p><a href="${resetUrl}">Reset your password</a> (valid for 30 minutes).</p><p>If you did not request this, you can ignore this email.</p>`,
+    });
+    await writeAudit(req, { actorId: user.user_id, action: 'FORGOT_PASSWORD', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
+  } else {
+    await writeAudit(req, { action: 'FORGOT_PASSWORD', resourceType: 'USER', outcome: 'FAILURE', metadata: { email } });
+  }
+  res.status(200).json({ message: 'If an account exists for that email, a reset link has been sent.' });
+}
+
+async function resetPassword(req, res) {
+  const token = assertString(req.body.token, 'token', { min: 20, max: 200 });
+  const newPassword = assertPassword(req.body.password);
+  const rows = await query(
+    "SELECT user_id FROM users WHERE reset_token_hash = ? AND reset_expires_at > NOW() AND status = 'Active' LIMIT 1",
+    [hashToken(token)]
+  );
+  if (!rows[0]) {
+    await writeAudit(req, { action: 'RESET_PASSWORD', resourceType: 'USER', outcome: 'FAILURE' });
+    return res.status(400).json({ error: 'Invalid or expired reset token.' });
+  }
+  await execute(
+    'UPDATE users SET password_hash = ?, reset_token_hash = NULL, reset_expires_at = NULL, token_version = token_version + 1 WHERE user_id = ?',
+    [await hashPassword(newPassword), rows[0].user_id]
+  );
+  await writeAudit(req, { actorId: rows[0].user_id, action: 'RESET_PASSWORD', resourceType: 'USER', resourceId: rows[0].user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ message: 'Password reset successful. Please sign in.' });
+}
+
 async function listStaff(_req, res) {
   const rows = await query(
     "SELECT user_id, name, email, role, status, last_login FROM users WHERE role != 'Patient' AND status != 'Deactivated' ORDER BY CAST(SUBSTRING(user_id, 5) AS UNSIGNED) ASC"
@@ -551,6 +697,81 @@ async function deactivateStaff(req, res) {
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'DEACTIVATE_STAFF', resourceType: 'USER', resourceId: userId, outcome: 'SUCCESS' });
   res.status(200).json({ message: 'Staff account deactivated.' });
+}
+
+async function bookConsultation(req, res) {
+  const consultationId = `MH-C-${Date.now()}`;
+  await execute(
+    "INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status) VALUES (?, ?, NULL, 'Pending')",
+    [consultationId, req.user.user_id]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'BOOK_CONSULTATION', resourceType: 'CONSULTATION', resourceId: consultationId, outcome: 'SUCCESS' });
+  res.status(201).json({ consultationId, status: 'Pending' });
+}
+
+async function listConsultations(req, res) {
+  let rows;
+  if (req.user.role === 'Patient') {
+    rows = await query(
+      `SELECT c.consultation_id, c.session_status, c.created_at, c.completed_at, d.name AS doctor_name
+       FROM consultations c LEFT JOIN users d ON d.user_id = c.doctor_id
+       WHERE c.patient_id = ? ORDER BY c.created_at DESC`,
+      [req.user.user_id]
+    );
+  } else if (req.user.role === 'Doctor') {
+    // Assigned to me, plus the unclaimed pending pool.
+    rows = await query(
+      `SELECT c.consultation_id, c.patient_id, p.name AS patient_name, c.doctor_id, c.session_status, c.created_at
+       FROM consultations c JOIN users p ON p.user_id = c.patient_id
+       WHERE c.doctor_id = ? OR (c.doctor_id IS NULL AND c.session_status = 'Pending')
+       ORDER BY FIELD(c.session_status, 'Active', 'Pending', 'Completed'), c.created_at`,
+      [req.user.user_id]
+    );
+  } else {
+    // Nurse / Admin: active workload.
+    rows = await query(
+      `SELECT c.consultation_id, c.patient_id, p.name AS patient_name, c.doctor_id, d.name AS doctor_name, c.session_status, c.created_at
+       FROM consultations c JOIN users p ON p.user_id = c.patient_id LEFT JOIN users d ON d.user_id = c.doctor_id
+       WHERE c.session_status IN ('Pending', 'Active') ORDER BY c.created_at`
+    );
+  }
+  res.status(200).json(rows);
+}
+
+async function updateConsultation(req, res) {
+  const id = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
+  const action = assertEnum(req.body.action, 'action', ['claim', 'assign', 'start', 'complete', 'cancel']);
+  const rows = await query('SELECT * FROM consultations WHERE consultation_id = ? LIMIT 1', [id]);
+  const consultation = rows[0];
+  if (!consultation) throw notFound('Consultation not found.');
+
+  // Doctors may only act on consultations assigned to them (except claiming a free one).
+  const isOwningDoctor = req.user.role === 'Doctor' && consultation.doctor_id === req.user.user_id;
+
+  if (action === 'claim') {
+    if (req.user.role !== 'Doctor') throw forbidden('Only doctors can claim a consultation.');
+    if (consultation.session_status !== 'Pending' || consultation.doctor_id) throw badRequest('Consultation is not available to claim.');
+    await execute("UPDATE consultations SET doctor_id = ? WHERE consultation_id = ? AND doctor_id IS NULL", [req.user.user_id, id]);
+  } else if (action === 'assign') {
+    if (!['Nurse', 'Admin'].includes(req.user.role)) throw forbidden();
+    const doctorId = assertString(req.body.doctorId, 'doctorId', { min: 4, max: 36 });
+    await execute("UPDATE consultations SET doctor_id = ? WHERE consultation_id = ?", [doctorId, id]);
+  } else if (action === 'start') {
+    if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
+    if (consultation.session_status !== 'Pending') throw badRequest('Only a pending consultation can start.');
+    await execute("UPDATE consultations SET session_status = 'Active' WHERE consultation_id = ?", [id]);
+  } else if (action === 'complete') {
+    if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
+    if (consultation.session_status !== 'Active') throw badRequest('Only an active consultation can be completed.');
+    await execute("UPDATE consultations SET session_status = 'Completed', completed_at = CURRENT_TIMESTAMP WHERE consultation_id = ?", [id]);
+  } else if (action === 'cancel') {
+    if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
+    if (consultation.session_status === 'Completed') throw badRequest('Completed consultations cannot be cancelled.');
+    await execute("UPDATE consultations SET session_status = 'Cancelled' WHERE consultation_id = ?", [id]);
+  }
+
+  await writeAudit(req, { actorId: req.user.user_id, action: `CONSULTATION_${action.toUpperCase()}`, resourceType: 'CONSULTATION', resourceId: id, outcome: 'SUCCESS' });
+  res.status(200).json({ message: `Consultation ${action} successful.` });
 }
 
 function triagePriority(answers) {
@@ -696,22 +917,100 @@ async function getPayment(req, res) {
 async function createPrescription(req, res) {
   const consultationId = assertString(req.body.consultationId, 'consultationId', { min: 4, max: 36 });
   const patientId = assertString(req.body.patientId, 'patientId', { min: 4, max: 36 });
-  const medication = assertString(req.body.medication, 'medication', { min: 2, max: 120 });
   const dosage = assertString(req.body.dosage, 'dosage', { min: 1, max: 80 });
   const frequency = assertString(req.body.frequency, 'frequency', { min: 1, max: 80 });
   const refills = Number(req.body.refills || 0);
   const instructions = assertOptionalString(req.body.instructions, 'instructions', { min: 0, max: 500 });
+
+  // Prefer selecting from the MySQL inventory; fall back to free-text medication name.
+  let medicationId = assertOptionalString(req.body.medicationId, 'medicationId', { min: 3, max: 40 });
+  let medication = assertOptionalString(req.body.medication, 'medication', { min: 2, max: 120 });
+  if (medicationId) {
+    const meds = await query('SELECT name FROM medication_inventory WHERE medication_id = ? LIMIT 1', [medicationId]);
+    if (!meds[0]) throw badRequest('Selected medication is not in the inventory.');
+    medication = meds[0].name;
+  } else if (!medication) {
+    throw badRequest('A medication (id or name) is required.');
+  } else {
+    medicationId = null;
+  }
+
   await ensureAssignedDoctor(consultationId, req.user.user_id, patientId);
 
   const prescriptionId = `RX-${Date.now()}`;
   await execute(
     `INSERT INTO prescriptions
-     (prescription_id, consultation_id, patient_id, doctor_id, medication_name, dosage, frequency, refills, instructions_encrypted, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Issued')`,
-    [prescriptionId, consultationId, patientId, req.user.user_id, medication, dosage, frequency, refills, encryptText(instructions || '', config)]
+     (prescription_id, consultation_id, patient_id, doctor_id, medication_id, medication_name, dosage, frequency, refills, instructions_encrypted, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Issued')`,
+    [prescriptionId, consultationId, patientId, req.user.user_id, medicationId, medication, dosage, frequency, refills, encryptText(instructions || '', config)]
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'ISSUE_PRESCRIPTION', resourceType: 'PRESCRIPTION', resourceId: prescriptionId, outcome: 'SUCCESS', metadata: { consultationId, patientId, medication } });
   res.status(201).json({ prescriptionId, status: 'Issued' });
+}
+
+async function listInventory(_req, res) {
+  const rows = await query('SELECT medication_id, name, form, stock_quantity, unit_price_cents FROM medication_inventory ORDER BY name');
+  res.status(200).json(rows);
+}
+
+async function listPharmacyQueue(_req, res) {
+  const rows = await query(
+    `SELECT p.prescription_id, p.patient_id, u.name AS patient_name, p.medication_name, p.dosage, p.frequency, p.status, p.issued_at,
+            i.stock_quantity
+     FROM prescriptions p
+     JOIN users u ON u.user_id = p.patient_id
+     LEFT JOIN medication_inventory i ON i.medication_id = p.medication_id
+     WHERE p.status = 'Issued'
+     ORDER BY p.issued_at ASC`
+  );
+  res.status(200).json(rows);
+}
+
+async function listPatientPrescriptions(req, res) {
+  const rows = await query(
+    `SELECT prescription_id, medication_name, dosage, frequency, refills, status, issued_at, fulfilled_at
+     FROM prescriptions WHERE patient_id = ? ORDER BY issued_at DESC`,
+    [req.user.user_id]
+  );
+  res.status(200).json(rows);
+}
+
+async function fulfilPrescription(req, res) {
+  const prescriptionId = assertString(req.params.id, 'prescription id', { min: 3, max: 50 });
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    // Lock the prescription row for the duration of the fulfilment.
+    const [pres] = await connection.execute('SELECT * FROM prescriptions WHERE prescription_id = ? FOR UPDATE', [prescriptionId]);
+    const prescription = pres[0];
+    if (!prescription) throw notFound('Prescription not found.');
+    if (prescription.status !== 'Issued') throw badRequest('Only issued prescriptions can be fulfilled.');
+
+    if (prescription.medication_id) {
+      // Atomically decrement stock; the WHERE guard prevents overselling.
+      const [result] = await connection.execute(
+        'UPDATE medication_inventory SET stock_quantity = stock_quantity - 1 WHERE medication_id = ? AND stock_quantity > 0',
+        [prescription.medication_id]
+      );
+      if (result.affectedRows === 0) {
+        await connection.rollback();
+        return res.status(409).json({ error: 'Medication is out of stock.' });
+      }
+    }
+
+    await connection.execute(
+      "UPDATE prescriptions SET status = 'Fulfilled', fulfilled_by = ?, fulfilled_at = CURRENT_TIMESTAMP WHERE prescription_id = ?",
+      [req.user.user_id, prescriptionId]
+    );
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  await writeAudit(req, { actorId: req.user.user_id, action: 'FULFIL_PRESCRIPTION', resourceType: 'PRESCRIPTION', resourceId: prescriptionId, outcome: 'SUCCESS' });
+  res.status(200).json({ message: 'Prescription fulfilled.', status: 'Fulfilled' });
 }
 
 async function getPrescription(req, res) {
@@ -738,8 +1037,18 @@ async function createMedicalCertificate(req, res) {
   );
   if (paid.length === 0) throw forbidden('Verified payment is required before MC release.');
 
+  // Lazily provision this doctor's Ed25519 signing keypair (private key encrypted at rest).
+  const doctorRows = await query('SELECT mc_public_key, mc_private_key_encrypted FROM users WHERE user_id = ?', [req.user.user_id]);
+  let privateKeyPem = doctorRows[0]?.mc_private_key_encrypted ? decryptText(doctorRows[0].mc_private_key_encrypted, config) : null;
+  if (!privateKeyPem || !doctorRows[0]?.mc_public_key) {
+    const keyPair = generateMcKeyPair();
+    privateKeyPem = keyPair.privateKeyPem;
+    await execute('UPDATE users SET mc_public_key = ?, mc_private_key_encrypted = ? WHERE user_id = ?', [keyPair.publicKeyPem, encryptText(keyPair.privateKeyPem, config), req.user.user_id]);
+  }
+
   const mcId = `MH-MC-${Date.now()}`;
-  const token = signMcToken({ mc_id: mcId, patient_id: patientId, issue_date: new Date().toISOString().slice(0, 10) }, config.mcSigningKey);
+  // Sign with the doctor's PRIVATE key (asymmetric non-repudiation).
+  const token = signMcTokenAsym({ mc_id: mcId, patient_id: patientId, doctor_id: req.user.user_id, issue_date: new Date().toISOString().slice(0, 10) }, privateKeyPem);
   await execute(
     `INSERT INTO medical_certificates
      (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, diagnosis_encrypted, qr_token_hash, signature_hash, is_revoked)
@@ -788,22 +1097,30 @@ async function revokeMedicalCertificate(req, res) {
 }
 
 async function verifyMedicalCertificate(req, res) {
-  const token = assertString(req.params.token, 'token', { min: 20, max: 1000 });
+  const token = assertString(req.params.token, 'token', { min: 20, max: 2000 });
+  // Decode (unverified) only to locate the certificate + its signing doctor.
   let payload;
   try {
-    payload = verifyMcToken(token, config.mcSigningKey);
+    payload = decodeMcPayload(token);
   } catch {
     return res.status(400).json({ valid: false });
   }
   const rows = await query(
-    `SELECT mc_id, issue_date, valid_until, is_revoked
-     FROM medical_certificates
-     WHERE mc_id = ? AND qr_token_hash = ?
+    `SELECT mc.mc_id, mc.issue_date, mc.valid_until, mc.is_revoked, u.mc_public_key
+     FROM medical_certificates mc
+     JOIN users u ON u.user_id = mc.doctor_id
+     WHERE mc.mc_id = ? AND mc.qr_token_hash = ?
      LIMIT 1`,
     [payload.mc_id, hashToken(token)]
   );
   const mc = rows[0];
-  if (!mc) return res.status(404).json({ valid: false });
+  if (!mc || !mc.mc_public_key) return res.status(404).json({ valid: false });
+  // Cryptographically verify the signature against the doctor's PUBLIC key.
+  try {
+    verifyMcTokenAsym(token, mc.mc_public_key);
+  } catch {
+    return res.status(400).json({ valid: false });
+  }
   res.status(200).json({
     valid: !mc.is_revoked,
     issueDate: mc.issue_date,
@@ -850,6 +1167,81 @@ async function registerAttachment(req, res) {
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'REGISTER_ATTACHMENT', resourceType: 'ATTACHMENT', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { consultationId, mimeType: attachment.mimeType, sizeBytes: attachment.sizeBytes } });
   res.status(201).json({ attachmentId: result.insertId, malwareScanStatus: attachment.malwareScanStatus });
+}
+
+async function uploadAttachment(req, res) {
+  // Strict id pattern (no path-traversal chars) — defence-in-depth for the fs path below.
+  const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36, pattern: /^[A-Za-z0-9-]+$/ });
+  await ensureConsultationAccess(req.user, consultationId);
+  if (!req.file) throw badRequest('A file is required.');
+  // Validate type/size/name, then scan the bytes for malware before anything is stored.
+  const meta = scanAttachmentMetadata({ filename: req.file.originalname, mimeType: req.file.mimetype, sizeBytes: req.file.size });
+  const scan = await scanBufferForMalware(req.file.buffer, config);
+  if (!scan.clean) {
+    await writeAudit(req, { actorId: req.user.user_id, action: 'UPLOAD_ATTACHMENT', resourceType: 'ATTACHMENT', resourceId: consultationId, outcome: 'FAILURE', metadata: { signature: scan.signature, engine: scan.engine } });
+    return res.status(422).json({ error: 'Attachment failed malware scan.' });
+  }
+  // Store under a server-generated name (never the client's) outside the web root.
+  // Path components are validated (id pattern above; filename pattern in scanAttachmentMetadata).
+  const dir = path.join(config.uploadDir, consultationId);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir built from validated id
+  await fs.mkdir(dir, { recursive: true });
+  const storedName = `${randomToken(8)}_${meta.filename}`;
+  const storagePath = path.join(dir, storedName);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- server-generated path
+  await fs.writeFile(storagePath, req.file.buffer, { mode: 0o600 });
+  const status = scan.engine === 'clamav' ? 'PASSED' : 'PASSED_STUB';
+  const result = await execute(
+    `INSERT INTO message_attachments (consultation_id, uploader_id, filename, mime_type, size_bytes, malware_scan_status, storage_path)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [consultationId, req.user.user_id, meta.filename, meta.mimeType, meta.sizeBytes, status, storagePath]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'UPLOAD_ATTACHMENT', resourceType: 'ATTACHMENT', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { consultationId, engine: scan.engine } });
+  res.status(201).json({ attachmentId: result.insertId, malwareScanStatus: status, scanEngine: scan.engine });
+}
+
+async function downloadAttachment(req, res) {
+  const attachmentId = assertPositiveInteger(req.params.id, 'attachment id');
+  const rows = await query('SELECT * FROM message_attachments WHERE attachment_id = ? LIMIT 1', [attachmentId]);
+  const attachment = rows[0];
+  if (!attachment || !attachment.storage_path) throw notFound('Attachment not found.');
+  // Only participants of the consultation may download (object-level authz).
+  await ensureConsultationAccess(req.user, attachment.consultation_id);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- storage_path is server-written, never user input
+  const buffer = await fs.readFile(attachment.storage_path);
+  res.setHeader('Content-Type', attachment.mime_type);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', `attachment; filename="${attachment.filename.replace(/"/g, '')}"`);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'DOWNLOAD_ATTACHMENT', resourceType: 'ATTACHMENT', resourceId: String(attachmentId), outcome: 'SUCCESS' });
+  res.status(200).send(buffer);
+}
+
+async function issueRealtimeToken(req, res) {
+  const token = mintFirebaseCustomToken(req.user.user_id, { role: req.user.role }, config);
+  if (!token) return res.status(503).json({ error: 'Realtime (Firebase) is not configured.' });
+  await writeAudit(req, { actorId: req.user.user_id, action: 'REALTIME_TOKEN', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ token });
+}
+
+async function getRtcCredentials(req, res) {
+  const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
+  // Only the assigned doctor/patient of the consultation may obtain TURN credentials.
+  await ensureConsultationAccess(req.user, consultationId);
+  const creds = makeTurnCredentials(config);
+  if (!creds) return res.status(503).json({ error: 'TURN/WebRTC is not configured.' });
+  res.status(200).json({ ...creds, consultationId });
+}
+
+async function startRecordingSession(req, res) {
+  const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
+  await ensureConsultationAccess(req.user, consultationId);
+  if (req.body.consent !== true) throw badRequest('Patient consent is required to start a recording.');
+  const result = await execute(
+    'INSERT INTO recording_sessions (consultation_id, started_by, patient_consent) VALUES (?, ?, TRUE)',
+    [consultationId, req.user.user_id]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'START_RECORDING', resourceType: 'RECORDING', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { consultationId } });
+  res.status(201).json({ recordingId: result.insertId, consent: true });
 }
 
 async function ensureAssignedDoctor(consultationId, doctorId, patientId) {

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import net from 'net';
 
 export const ROLES = ['Patient', 'Nurse', 'Doctor', 'Admin', 'Pharmacist'];
 export const STAFF_ROLES = ['Nurse', 'Doctor', 'Admin', 'Pharmacist'];
@@ -39,6 +40,14 @@ export function getConfig() {
       .map((role) => role.trim())
       .filter(Boolean),
     secureCookies: isProduction,
+    // Optional integrations (feature-flagged; absent => graceful fallback / 503).
+    clamdHost: process.env.CLAMD_HOST || '',
+    clamdPort: Number(process.env.CLAMD_PORT || 3310),
+    uploadDir: process.env.UPLOAD_DIR || 'uploads',
+    firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
+    firebasePrivateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+    turnSecret: process.env.TURN_SECRET || '',
+    turnUrls: (process.env.TURN_URLS || '').split(',').map((u) => u.trim()).filter(Boolean),
   };
 
   if (missing.length > 0) {
@@ -231,6 +240,40 @@ export function verifyMcToken(token, secret) {
   if (!encoded || !signature) throw new Error('Malformed MC token.');
   const expected = crypto.createHmac('sha256', secret).update(encoded).digest('base64url');
   if (!safeEqual(signature, expected)) throw new Error('Invalid MC token signature.');
+  return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+}
+
+// --- Asymmetric MC signing (Ed25519) -------------------------------------
+// Each doctor owns a keypair; MCs are signed with the doctor's PRIVATE key and
+// verified by anyone holding the PUBLIC key (true non-repudiation, matching the
+// Deliverable 1 design "signed by the doctor's private cryptographic key").
+export function generateMcKeyPair() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  return {
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+  };
+}
+
+export function signMcTokenAsym(payload, privateKeyPem) {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.sign(null, Buffer.from(encoded), privateKeyPem).toString('base64url');
+  return `${encoded}.${signature}`;
+}
+
+// Decode the payload WITHOUT verifying (used only to locate the signing doctor;
+// the signature is then verified cryptographically against that doctor's key).
+export function decodeMcPayload(token) {
+  const [encoded] = String(token).split('.');
+  if (!encoded) throw new Error('Malformed MC token.');
+  return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+}
+
+export function verifyMcTokenAsym(token, publicKeyPem) {
+  const [encoded, signature] = String(token).split('.');
+  if (!encoded || !signature) throw new Error('Malformed MC token.');
+  const ok = crypto.verify(null, Buffer.from(encoded), publicKeyPem, Buffer.from(signature, 'base64url'));
+  if (!ok) throw new Error('Invalid MC token signature.');
   return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
 }
 
@@ -443,4 +486,71 @@ export function sessionPayload(user, overrides = {}) {
 
 export function currentUnixSeconds() {
   return Math.floor(Date.now() / 1000);
+}
+
+// --- Malware scanning of uploaded files (Phase 4) -------------------------
+// Streams the buffer to a ClamAV daemon (clamd, INSTREAM) when CLAMD_HOST is set;
+// otherwise falls back to an EICAR-signature stub so the upload pipeline is testable
+// without a running antivirus engine.
+export async function scanBufferForMalware(buffer, config) {
+  if (!config.clamdHost) {
+    const eicar = 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE';
+    const clean = !Buffer.from(buffer).includes(eicar);
+    return { clean, engine: 'stub', signature: clean ? null : 'Eicar-Test-Signature' };
+  }
+  return scanWithClamd(buffer, config.clamdHost, config.clamdPort);
+}
+
+function scanWithClamd(buffer, host, port) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host, port });
+    let response = '';
+    socket.setTimeout(15000);
+    socket.on('connect', () => {
+      socket.write('zINSTREAM\0');
+      const size = Buffer.alloc(4);
+      size.writeUInt32BE(buffer.length, 0);
+      socket.write(Buffer.concat([size, Buffer.from(buffer)]));
+      const terminator = Buffer.alloc(4); // zero-length chunk ends the stream
+      socket.write(terminator);
+    });
+    socket.on('data', (chunk) => { response += chunk.toString(); });
+    socket.on('timeout', () => { socket.destroy(); reject(new Error('clamd scan timed out')); });
+    socket.on('error', reject);
+    socket.on('end', () => {
+      const found = response.match(/stream:\s+(.+)\s+FOUND/);
+      resolve({ clean: /stream:\s+OK/.test(response), engine: 'clamav', signature: found ? found[1] : null });
+    });
+  });
+}
+
+// --- Firebase custom token (Phase 4 realtime) -----------------------------
+// Mints a Firebase Auth custom token (RS256, signed with the service-account key)
+// carrying uid + role claims, so Firebase security rules can enforce access. Returns
+// null when Firebase is not configured (endpoint then responds 503). No SDK needed.
+export function mintFirebaseCustomToken(uid, additionalClaims, config) {
+  if (!config.firebaseClientEmail || !config.firebasePrivateKey) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    iss: config.firebaseClientEmail,
+    sub: config.firebaseClientEmail,
+    aud: 'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',
+    iat: now,
+    exp: now + 3600,
+    uid,
+    claims: additionalClaims || {},
+  })).toString('base64url');
+  const signature = crypto.sign('RSA-SHA256', Buffer.from(`${header}.${payload}`), config.firebasePrivateKey).toString('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+// --- Time-limited TURN credentials (Phase 5 WebRTC) -----------------------
+// coturn "use-auth-secret" scheme: username = <expiry-unixtime>, password = base64(HMAC-SHA1(secret, username)).
+// Returns null when TURN is not configured.
+export function makeTurnCredentials(config, ttlSeconds = 3600) {
+  if (!config.turnSecret || config.turnUrls.length === 0) return null;
+  const username = String(Math.floor(Date.now() / 1000) + ttlSeconds);
+  const credential = crypto.createHmac('sha1', config.turnSecret).update(username).digest('base64');
+  return { username, credential, ttl: ttlSeconds, urls: config.turnUrls };
 }

@@ -9,6 +9,12 @@ frontend/.vite/
 .env
 .env.local
 *.env
+.env.production
+!.env.production.example
+
+# Uploaded files (malware-scanned attachments stored outside the web root)
+uploads/
+backend/uploads/
 
 # Python virtual environment
 .venv/

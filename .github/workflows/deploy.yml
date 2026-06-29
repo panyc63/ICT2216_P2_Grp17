@@ -1,0 +1,36 @@
+name: Deploy to VM
+
+# OPT-IN continuous deployment. Manual by default so it never fails for forks that
+# haven't configured a server. To deploy automatically, add `push: branches: [main]`
+# and configure the repository secrets below (Settings -> Secrets and variables -> Actions):
+#   DEPLOY_SSH_HOST   - VM public IP / hostname
+#   DEPLOY_SSH_USER   - SSH user (e.g. ubuntu)
+#   DEPLOY_SSH_KEY    - private SSH key with access to the VM
+#   DEPLOY_PATH       - path to the cloned repo on the VM (e.g. /home/ubuntu/ICT2216_P2_Grp17)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: SSH redeploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_SSH_HOST }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            git pull --ff-only
+            docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+            docker image prune -f

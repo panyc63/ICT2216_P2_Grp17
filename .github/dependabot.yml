@@ -1,0 +1,32 @@
+# Automated dependency checks for MediFlow.
+# Dependabot opens PRs for vulnerable/outdated dependencies; combined with the
+# Dependency Review workflow and `npm audit`, this is the team's "implemented
+# dependency check" evidence (Report II) and supports NIST SSDF PW.4 / PS.3.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /              # repo-level lint/security tooling
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, security]
+
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, security, backend]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, security, frontend]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies, ci]

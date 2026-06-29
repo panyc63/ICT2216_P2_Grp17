@@ -33,7 +33,7 @@
           </div>
 
           <dd v-if="!isEditing" class="mt-2 text-sm font-medium text-slate-900">
-            {{ profile.homeAddress }}
+            {{ profile.address || '—' }}
           </dd>
 
           <div v-else class="mt-3">
@@ -69,17 +69,33 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { patientStore } from '../../store/patientStore'
+import { ref, reactive, onMounted } from 'vue'
+import { apiFetch } from '../../services/api'
 
-const profile = patientStore.profile
+const profile = reactive({ name: '', email: '', nric: '', address: '' })
 
 const isEditing = ref(false)
 const draftAddress = ref('')
 const savedNotice = ref(false)
 
+const loadProfile = async () => {
+  try {
+    const data = await apiFetch('/me/profile')
+    Object.assign(profile, {
+      name: data.name,
+      email: data.email,
+      nric: data.nric,
+      address: data.address,
+    })
+  } catch {
+    // Unauthenticated or error — leave fields blank.
+  }
+}
+
+onMounted(loadProfile)
+
 const startEditing = () => {
-  draftAddress.value = profile.homeAddress
+  draftAddress.value = profile.address
   savedNotice.value = false
   isEditing.value = true
 }
@@ -88,9 +104,17 @@ const cancelEditing = () => {
   isEditing.value = false
 }
 
-const saveAddress = () => {
-  profile.homeAddress = draftAddress.value.trim()
-  isEditing.value = false
-  savedNotice.value = true
+const saveAddress = async () => {
+  try {
+    await apiFetch('/me/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ address: draftAddress.value.trim() }),
+    })
+    profile.address = draftAddress.value.trim()
+    isEditing.value = false
+    savedNotice.value = true
+  } catch (err) {
+    alert(err.message || 'Could not update profile.')
+  }
 }
 </script>

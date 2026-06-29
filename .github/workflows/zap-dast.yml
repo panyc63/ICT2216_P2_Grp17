@@ -1,0 +1,61 @@
+name: DAST (OWASP ZAP Baseline)
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 5 * * 1" # weekly, Monday 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zap-baseline:
+    name: ZAP baseline scan
+    runs-on: ubuntu-latest
+    # Informational: dynamic scan results are uploaded as an artifact and never
+    # block merges (DAST can be noisy / environment-dependent).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for the frontend to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080 >/dev/null 2>&1; then
+              echo "Frontend is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Frontend did not become ready"; docker compose logs; exit 1
+
+      - name: Run ZAP baseline scan
+        continue-on-error: true
+        run: |
+          docker run --network host -v "$(pwd):/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://localhost:8080 \
+            -r zap-report.html -w zap-report.md -J zap-report.json || true
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-baseline-report
+          path: |
+            zap-report.html
+            zap-report.md
+            zap-report.json
+          if-no-files-found: ignore
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose down -v

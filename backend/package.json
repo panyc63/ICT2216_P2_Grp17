@@ -6,12 +6,14 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test security.test.js",
+    "test:integration": "node --test integration.test.js",
     "audit:prod": "npm audit --omit=dev"
   },
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.2",
+    "multer": "^2.2.0",
     "mysql2": "^3.22.5",
     "nodemailer": "^9.0.1"
   }

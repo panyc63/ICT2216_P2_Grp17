@@ -39,10 +39,12 @@
             >
           </div>
 
-          <button type="submit" class="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl hover:bg-indigo-700 shadow-md hover:-translate-y-0.5 transition-all duration-200">
-            Send Reset Link
+          <button type="submit" :disabled="submitting" class="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl hover:bg-indigo-700 shadow-md hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-60">
+            {{ submitting ? 'Sending…' : 'Send Reset Link' }}
           </button>
-          
+
+          <p v-if="notice" class="text-sm font-medium text-emerald-600 text-center">{{ notice }}</p>
+
           <div class="text-center pt-2">
             <router-link to="/login" class="text-sm text-indigo-600 font-bold hover:underline transition-all">
               ← Back to sign in
@@ -56,11 +58,27 @@
 
 <script setup>
 import { ref } from 'vue'
+import { apiFetch } from '../services/api'
 
 const email = ref('')
+const submitting = ref(false)
+const notice = ref('')
 
-const handleReset = () => {
-  alert(`Password recovery link has been safely fired to: ${email.value}`)
-  email.value = ''
+const handleReset = async () => {
+  submitting.value = true
+  notice.value = ''
+  try {
+    const res = await apiFetch('/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.value }),
+    })
+    // Backend returns a neutral message (no account enumeration).
+    notice.value = res.message || 'If an account exists for that email, a reset link has been sent.'
+    email.value = ''
+  } catch (err) {
+    notice.value = err.message || 'Something went wrong. Please try again.'
+  } finally {
+    submitting.value = false
+  }
 }
 </script>

@@ -39,29 +39,30 @@
         </div>
 
         <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <div v-for="room in filteredConsultations" :key="room.id" class="bg-white border border-slate-200 p-6 rounded-xl shadow-sm flex flex-col justify-between">
+          <div v-for="room in filteredConsultations" :key="room.consultation_id" class="bg-white border border-slate-200 p-6 rounded-xl shadow-sm flex flex-col justify-between">
             <div>
               <div class="flex justify-between items-start mb-4">
                 <div>
-                  <h4 class="font-bold text-slate-900">Room Token: {{ room.id }}</h4>
-                  <p class="text-xs text-slate-400 mt-0.5">Network Stream Health: {{ room.latency }}ms</p>
+                  <h4 class="font-bold text-slate-900">{{ room.consultation_id }}</h4>
+                  <p class="text-xs text-slate-400 mt-0.5">Patient: {{ room.patient_name }}</p>
                 </div>
-                <span class="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 animate-pulse">Live</span>
+                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset"
+                  :class="room.session_status === 'Active' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : 'bg-amber-50 text-amber-700 ring-amber-600/20'">
+                  {{ room.session_status }}
+                </span>
               </div>
-              
               <div class="space-y-2 border-t border-slate-100 pt-3 mb-6">
                 <p class="text-sm text-slate-600">
-                  <span class="font-semibold text-slate-700">Practitioner:</span> {{ room.doctor }}
-                </p>
-                <p class="text-sm text-slate-600">
-                  <span class="font-semibold text-slate-700">Patient Target:</span> {{ room.patient }}
+                  <span class="font-semibold text-slate-700">Assigned:</span> {{ room.doctor_id ? 'You' : 'Unassigned' }}
                 </p>
               </div>
             </div>
 
-            <button @click="joinRoom(room.id)" class="w-full text-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg shadow-sm transition-colors">
-              Launch Telehealth Stream
-            </button>
+            <div class="flex gap-2">
+              <button v-if="!room.doctor_id && room.session_status === 'Pending'" @click="act(room, 'claim')" class="flex-1 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white font-medium text-sm rounded-lg">Claim</button>
+              <button v-if="room.doctor_id && room.session_status === 'Pending'" @click="act(room, 'start')" class="flex-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg">Start</button>
+              <button v-if="room.session_status === 'Active'" @click="act(room, 'complete')" class="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm rounded-lg">Complete</button>
+            </div>
           </div>
         </div>
       </div>
@@ -97,50 +98,52 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { logout } from '../../services/api'
+import { apiFetch, logout } from '../../services/api'
 
 const router = useRouter()
 const activeTab = ref('my-consultations')
 
-// Simulated application current user state (This can be derived from your Pinia store or localStorage)
-const currentUser = ref({
-  name: 'Dr. John Doe',
-  role: 'Doctor' // Swap with 'Patient' or alternative names to see pipeline filters adapt dynamically
+const currentUser = ref({ name: '', role: 'Doctor' })
+const consultations = ref([])
+// Recording archive is delivered in the WebRTC phase; show none until then.
+const recordings = ref([])
+
+const loadMe = async () => {
+  try {
+    const me = await apiFetch('/me')
+    currentUser.value = { name: me.user?.name || '', role: me.user?.role || 'Doctor' }
+  } catch { /* not signed in */ }
+}
+
+const loadConsultations = async () => {
+  try {
+    consultations.value = await apiFetch('/consultations')
+  } catch {
+    consultations.value = []
+  }
+}
+
+onMounted(async () => {
+  await loadMe()
+  await loadConsultations()
 })
 
-// Global Mock Master Pipelines (simulating data coming from your backend entity models)
-const consultations = ref([
-  { id: 'ROOM-77X', doctor: 'Dr. John Doe', patient: 'Michael Chang', latency: 12 },
-  { id: 'ROOM-42B', doctor: 'Dr. Sarah Lin', patient: 'Emma Watson', latency: 18 },
-  { id: 'ROOM-99A', doctor: 'Dr. John Doe', patient: 'Eleanor Vance', latency: 15 }
-])
+// Backend already scopes the list to this doctor (assigned + pending pool).
+const filteredConsultations = computed(() => consultations.value)
+const filteredRecordings = computed(() => recordings.value)
 
-const recordings = ref([
-  { id: 101, fileName: 'REC_DR_JOHN_DOE_MICHAEL_20260614.mp4', doctor: 'Dr. John Doe', date: '2026-06-14 09:22', size: '142.4 MB' },
-  { id: 102, fileName: 'REC_DR_SARAH_LIN_EMMA_20260615.mp4', doctor: 'Dr. Sarah Lin', date: '2026-06-15 14:45', size: '98.1 MB' },
-  { id: 103, fileName: 'REC_DR_JOHN_DOE_ELEANOR_20260616.mp4', doctor: 'Dr. John Doe', date: '2026-06-16 11:10', size: '114.7 MB' }
-])
-
-// Computed property: Filters out consultations where the current user is either the doctor or the patient
-const filteredConsultations = computed(() => {
-  return consultations.value.filter(room => {
-    return room.doctor === currentUser.value.name || room.patient === currentUser.value.name
-  })
-})
-
-// Computed property: Filters recordings tied explicitly to this specific user context
-const filteredRecordings = computed(() => {
-  return recordings.value.filter(video => {
-    return video.doctor === currentUser.value.name || video.patient === currentUser.value.name
-  })
-})
-
-// Telehealth Interactive Action Mock
-const joinRoom = (roomId) => {
-  alert(`Connecting down to streaming pipeline room: ${roomId}`)
-  // Implementation pattern: router.push(`/telehealth/room/${roomId}`)
+const act = async (room, action) => {
+  try {
+    await apiFetch(`/consultations/${room.consultation_id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action }),
+    })
+    await loadConsultations()
+  } catch (err) {
+    alert(err.message || `Could not ${action} the consultation.`)
+  }
 }
 
 const handleLogout = () => {

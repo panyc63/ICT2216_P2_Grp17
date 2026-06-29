@@ -1,12 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Home from '../views/Home.vue'
-import Login from '../views/Login.vue'
-import Register from '../views/Register.vue'
-import ForgetPassword from '../views/ForgetPassword.vue'
+import Login from '../views/login.vue'
+import Register from '../views/register.vue'
+import ForgetPassword from '../views/forgetPassword.vue'
+import ResetPassword from '../views/resetPassword.vue'
 import AboutUs from '../views/aboutUs.vue'
 import Services from '../views/services.vue'
 import ContactUs from '../views/contactUs.vue'
-import HardwareCheck from '../views/HardwareCheck.vue'
+import HardwareCheck from '../views/hardwareCheck.vue'
 import AdminDashboard from '../views/admin/adminDashboard.vue'
 import DocConsult from '../views/doc/docConsult.vue'
 import DocPrescribe from '../views/doc/docPrescribe.vue'
@@ -14,6 +15,7 @@ import DocDashboard from '../views/doc/docDashboard.vue'
 import NurseDashboard from '../views/nurse/nurseDashboard.vue'
 import NurseViewQueue from '../views/nurse/nurseViewQueue.vue'
 import NurseEditQueue from '../views/nurse/nurseEditQueue.vue'
+import PharmacistDashboard from '../views/pharmacist/pharmacistDashboard.vue'
 import { dashboardForRole, getCurrentSession } from '../services/api'
 
 // Patient-facing prototype views
@@ -33,6 +35,7 @@ const routes = [
   { path: '/login', name: 'Login', component: Login },
   { path: '/register', name: 'Register', component: Register },
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
+  { path: '/reset-password', name: 'ResetPassword', component: ResetPassword },
   { path: '/about', name: 'AboutUs', component: AboutUs },
   { path: '/services', name: 'Services', component: Services },
   { path: '/contact', name: 'ContactUs', component: ContactUs },
@@ -44,6 +47,7 @@ const routes = [
   { path: '/nurse-dashboard', name: 'NurseDashboard', component: NurseDashboard, meta: { requiresAuth: true, roles: ['Nurse'] } },
   { path: '/nurse-queue-view', name: 'NurseQueueView', component: NurseViewQueue, meta: { requiresAuth: true, roles: ['Nurse', 'Doctor'] } },
   { path: '/nurse-queue-edit', name: 'NurseQueueEdit', component: NurseEditQueue, meta: { requiresAuth: true, roles: ['Nurse'] } },
+  { path: '/pharmacist-dashboard', name: 'PharmacistDashboard', component: PharmacistDashboard, meta: { requiresAuth: true, roles: ['Pharmacist'] } },
   {
     path: '/patient',
     component: PatientLayout,
