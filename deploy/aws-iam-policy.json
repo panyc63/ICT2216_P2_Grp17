@@ -1,0 +1,18 @@
+{
+  "Comment": "Least-privilege IAM policy for the MediFlow EC2 instance role. Replace the ARNs with your account/region/secret/key. Attach to the instance profile so load-secrets.sh can read the secret and KMS can decrypt it.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadMediFlowSecret",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:ap-southeast-1:ACCOUNT_ID:secret:mediflow/prod-*"
+    },
+    {
+      "Sid": "DecryptWithMediFlowCmk",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:ap-southeast-1:ACCOUNT_ID:key/CMK_KEY_ID"
+    }
+  ]
+}

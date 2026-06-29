@@ -70,3 +70,42 @@ the docker-compose stack.)
   `MFA_REQUIRED_ROLES=disabled` for a no-email demo (see the env file comments).
 - Optional continuous deploy: `.github/workflows/deploy.yml` can SSH in and redeploy on
   push to `main` once you add the `DEPLOY_SSH_*` repository secrets.
+
+---
+
+## Phase 0 — Production security hardening (AWS)
+
+### Secrets in AWS KMS + Secrets Manager (instead of a plaintext .env)
+1. Create a KMS customer-managed key (CMK) for MediFlow.
+2. Create a Secrets Manager secret `mediflow/prod` (encrypted with that CMK) whose value is a
+   JSON object of the backend env vars:
+   ```json
+   { "JWT_SECRET": "...", "CSRF_SECRET": "...", "DATA_ENCRYPTION_KEY": "...",
+     "MC_SIGNING_KEY": "...", "DB_PASSWORD": "...", "DOMAIN": "mediflow.example.com",
+     "ACME_EMAIL": "you@example.com", "STRIPE_WEBHOOK_SECRET": "...", "RESEND_API_KEY": "..." }
+   ```
+   Generate each key with `openssl rand -base64 48`.
+3. Attach `deploy/aws-iam-policy.json` (edit the ARNs) to the **EC2 instance role** —
+   least-privilege `secretsmanager:GetSecretValue` on the secret + `kms:Decrypt` on the CMK.
+4. On the instance, materialise `.env.production` from the secret at boot:
+   ```bash
+   SECRET_ID=mediflow/prod AWS_REGION=ap-southeast-1 ./deploy/load-secrets.sh
+   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+   ```
+   Secrets Manager decrypts via KMS automatically using the instance role — no key material
+   is ever committed. (The backend still reads the same env vars, so no app change is needed.)
+
+### Encryption at rest — EBS (instead of RDS)
+Enable **EBS encryption** on the instance's data volume (default-encrypt new volumes in the
+EC2 console, or `--encrypted` at launch). This encrypts the MySQL `db_data` volume at rest —
+the pragmatic equivalent of RDS encryption for the single-VM tier.
+
+### Edge WAF / DDoS — Cloudflare (instead of AWS WAF)
+AWS WAF needs an ALB/CloudFront. For the single EC2, put **Cloudflare** in front:
+1. Add the domain to Cloudflare; set the A-record (proxied/orange-cloud) to the EC2 IP.
+2. Set SSL/TLS mode **Full (strict)** (Caddy already serves a valid cert).
+3. Enable the **WAF managed ruleset**, **rate limiting** (e.g. on `/api/login`), and Bot Fight Mode.
+4. Lock the EC2 security group to only accept 80/443 from Cloudflare IP ranges, so the origin
+   can't be reached directly.
+
+This gives managed WAF + DDoS + rate limiting + origin hiding without an ALB.
