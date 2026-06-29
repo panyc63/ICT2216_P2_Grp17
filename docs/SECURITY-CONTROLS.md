@@ -65,3 +65,40 @@ Error/Logging (PHI-safe structured errors, append-only audit), V13 API security
   primitives and runtime authorization.
 - Production-only controls (WAF, KMS, RDS encryption, Firebase rules, TLS 1.3 termination)
   are **deployment requirements** documented in the architecture, not enforced by CI.
+
+---
+
+## Implementation update — Deliverable-1 feature build (Phases 1–8)
+
+New functional features added since the audit, each with secure-SDLC controls + tests.
+
+| Feature (phase) | Endpoints / code | Security controls | Tests |
+|---|---|---|---|
+| Account self-service (1) | `/api/me/profile`, `/api/me/password`, `/api/forgot-password`, `/api/reset-password`, `DELETE /api/me` | re-auth for sensitive ops, hashed single-use reset token (30-min, no enumeration), `token_version` revocation, PHI encrypted, audit | U + I |
+| Consultation booking (2) | `POST/GET/PATCH /api/consultations` | RBAC, object-level (doctor owns consult), state-machine validation, audit | I |
+| Pharmacy fulfilment (3) | `/api/inventory`, `/api/pharmacy/queue`, `/api/prescriptions/:id/fulfil` | Pharmacist RBAC, re-auth, **DB transaction + WHERE-guard prevents overselling**, immutable Rx audit | I (incl. oversell) |
+| Asymmetric MC signing (6) | `signMcTokenAsym`/`verifyMcTokenAsym`, `/api/verify/mc/:token` | per-doctor **Ed25519** keys, private key encrypted at rest, public-key verification (non-repudiation), minimal QR response | U + I |
+
+### Encryption at rest coverage (Phase 7)
+
+AES-256-GCM (`encryptText`) protects the sensitive/PHI fields: triage answers
+(`triage_submissions.answers_encrypted`), chat bodies (`chat_messages.message_body_encrypted`),
+prescription instructions, MC diagnosis, patient `address`/`nric`, and the doctor's MC
+**private key**. Passwords use scrypt; tokens are stored hashed.
+
+- **Documented decision:** `email` and `name` are kept queryable identifiers (email drives
+  login/uniqueness). A **blind index (HMAC) + encrypted value** is the documented future
+  hardening; it was deliberately deferred to avoid destabilising authentication within scope.
+- **Production at-rest:** EBS volume encryption (and/or RDS encryption) covers the whole
+  datastore — see `deploy/README.md` / Phase 0.
+
+### Deliverable-1 ↔ implementation reconciliation
+
+- "AI triage" → implemented as a **deterministic rule-based** triage engine (no LLM); update
+  the report wording. No prompt-injection surface exists.
+- Security-control substitutions (student/EC2 scope): **Cloudflare** WAF (vs AWS WAF),
+  **EBS encryption** (vs RDS), **app-level object authz + envelope encryption** (vs per-patient
+  DB key isolation), **consent + recording metadata** (vs full media recording). See the
+  reality-check table in the plan.
+- Still infra-gated (delivered as code + setup docs): AWS KMS/Secrets Manager (Phase 0),
+  Firebase real-time chat + ClamAV uploads (Phase 4), WebRTC + coturn (Phase 5).
