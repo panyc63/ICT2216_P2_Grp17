@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "cors": "^2.8.6",
-    "dotenv": "^16.6.1",
+    "dotenv": "^17.4.2",
     "express": "^4.22.2",
     "multer": "^2.2.0",
     "mysql2": "^3.22.5",
