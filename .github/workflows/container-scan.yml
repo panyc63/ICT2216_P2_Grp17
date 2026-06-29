@@ -39,15 +39,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Trivy scan (vuln, secret, misconfig)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: CRITICAL,HIGH
-          format: sarif
-          output: trivy.sarif
+      # Install Trivy from its apt repo (robust — avoids action tag-resolution issues).
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Trivy filesystem scan (vuln, secret, misconfig)
+        run: |
+          trivy fs --scanners vuln,secret,misconfig \
+            --severity CRITICAL,HIGH \
+            --format sarif --output trivy.sarif \
+            --exit-code 0 --no-progress .
 
       - name: Upload Trivy SARIF
         if: always()

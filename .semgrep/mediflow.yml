@@ -36,14 +36,20 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     message: >
-      Query built from a template literal with interpolation. Ensure only
+      Query built from a template literal that INTERPOLATES a value. Ensure only
       trusted, hard-coded column/clause fragments are interpolated and that all
       user-supplied VALUES are passed as parameters ('?'). Review for injection.
       (OWASP Top 10 A03 Injection.)
+    # Only flag template literals containing real interpolation (`...${...}...`);
+    # static SQL strings are safe. Test files are excluded (fixtures, not prod code).
     patterns:
       - pattern-either:
-          - pattern: $DB.query(`...`)
-          - pattern: $DB.execute(`...`)
+          - pattern: $DB.query(`...${...}...`)
+          - pattern: $DB.execute(`...${...}...`)
+    paths:
+      exclude:
+        - "*.test.js"
+        - "**/*.test.js"
     metadata:
       owasp: "A03:2021 Injection"
       asvs: "V5"

@@ -1183,12 +1183,17 @@ async function uploadAttachment(req, res) {
   }
   // Store under a server-generated name (never the client's) outside the web root.
   // Path components are validated (id pattern above; filename pattern in scanAttachmentMetadata).
-  const dir = path.join(config.uploadDir, consultationId);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir built from validated id
-  await fs.mkdir(dir, { recursive: true });
+  const baseDir = path.resolve(config.uploadDir);
+  // nosemgrep: javascript.express.security.audit.express-path-join-resolve-traversal.express-path-join-resolve-traversal -- consultationId is regex-validated; containment asserted below
+  const dir = path.join(baseDir, consultationId);
   const storedName = `${randomToken(8)}_${meta.filename}`;
+  // nosemgrep: javascript.express.security.audit.express-path-join-resolve-traversal.express-path-join-resolve-traversal -- storedName is server-generated; containment asserted below
   const storagePath = path.join(dir, storedName);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- server-generated path
+  // Defence-in-depth: the resolved path must stay inside the upload root.
+  if (!path.resolve(storagePath).startsWith(baseDir + path.sep)) throw badRequest('Invalid attachment path.');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir validated + contained
+  await fs.mkdir(dir, { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- server-generated, contained path
   await fs.writeFile(storagePath, req.file.buffer, { mode: 0o600 });
   const status = scan.engine === 'clamav' ? 'PASSED' : 'PASSED_STUB';
   const result = await execute(
