@@ -1,0 +1,14 @@
+# Caddy edge for MediFlow — automatic HTTPS (Let's Encrypt) + reverse proxy.
+# DOMAIN and ACME_EMAIL are injected from .env.production via docker-compose.prod.yml.
+# For a real public hostname Caddy obtains a trusted cert automatically; for
+# DOMAIN=localhost it falls back to Caddy's internal CA (use `curl -k` to test).
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	# All traffic (static SPA + /api) goes to the frontend nginx container, which
+	# serves the built site and proxies /api -> backend. One public origin.
+	reverse_proxy frontend:8080
+}
