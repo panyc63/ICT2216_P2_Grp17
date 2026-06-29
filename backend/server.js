@@ -41,9 +41,11 @@ import {
   setSessionCookie,
   sha256,
   signJwt,
-  signMcToken,
+  signMcTokenAsym,
+  generateMcKeyPair,
+  decodeMcPayload,
+  verifyMcTokenAsym,
   verifyJwt,
-  verifyMcToken,
   verifyPassword,
 } from './security.js';
 
@@ -1017,8 +1019,18 @@ async function createMedicalCertificate(req, res) {
   );
   if (paid.length === 0) throw forbidden('Verified payment is required before MC release.');
 
+  // Lazily provision this doctor's Ed25519 signing keypair (private key encrypted at rest).
+  const doctorRows = await query('SELECT mc_public_key, mc_private_key_encrypted FROM users WHERE user_id = ?', [req.user.user_id]);
+  let privateKeyPem = doctorRows[0]?.mc_private_key_encrypted ? decryptText(doctorRows[0].mc_private_key_encrypted, config) : null;
+  if (!privateKeyPem || !doctorRows[0]?.mc_public_key) {
+    const keyPair = generateMcKeyPair();
+    privateKeyPem = keyPair.privateKeyPem;
+    await execute('UPDATE users SET mc_public_key = ?, mc_private_key_encrypted = ? WHERE user_id = ?', [keyPair.publicKeyPem, encryptText(keyPair.privateKeyPem, config), req.user.user_id]);
+  }
+
   const mcId = `MH-MC-${Date.now()}`;
-  const token = signMcToken({ mc_id: mcId, patient_id: patientId, issue_date: new Date().toISOString().slice(0, 10) }, config.mcSigningKey);
+  // Sign with the doctor's PRIVATE key (asymmetric non-repudiation).
+  const token = signMcTokenAsym({ mc_id: mcId, patient_id: patientId, doctor_id: req.user.user_id, issue_date: new Date().toISOString().slice(0, 10) }, privateKeyPem);
   await execute(
     `INSERT INTO medical_certificates
      (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, diagnosis_encrypted, qr_token_hash, signature_hash, is_revoked)
@@ -1067,22 +1079,30 @@ async function revokeMedicalCertificate(req, res) {
 }
 
 async function verifyMedicalCertificate(req, res) {
-  const token = assertString(req.params.token, 'token', { min: 20, max: 1000 });
+  const token = assertString(req.params.token, 'token', { min: 20, max: 2000 });
+  // Decode (unverified) only to locate the certificate + its signing doctor.
   let payload;
   try {
-    payload = verifyMcToken(token, config.mcSigningKey);
+    payload = decodeMcPayload(token);
   } catch {
     return res.status(400).json({ valid: false });
   }
   const rows = await query(
-    `SELECT mc_id, issue_date, valid_until, is_revoked
-     FROM medical_certificates
-     WHERE mc_id = ? AND qr_token_hash = ?
+    `SELECT mc.mc_id, mc.issue_date, mc.valid_until, mc.is_revoked, u.mc_public_key
+     FROM medical_certificates mc
+     JOIN users u ON u.user_id = mc.doctor_id
+     WHERE mc.mc_id = ? AND mc.qr_token_hash = ?
      LIMIT 1`,
     [payload.mc_id, hashToken(token)]
   );
   const mc = rows[0];
-  if (!mc) return res.status(404).json({ valid: false });
+  if (!mc || !mc.mc_public_key) return res.status(404).json({ valid: false });
+  // Cryptographically verify the signature against the doctor's PUBLIC key.
+  try {
+    verifyMcTokenAsym(token, mc.mc_public_key);
+  } catch {
+    return res.status(400).json({ valid: false });
+  }
   res.status(200).json({
     valid: !mc.is_revoked,
     issueDate: mc.issue_date,

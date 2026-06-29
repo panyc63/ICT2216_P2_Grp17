@@ -8,6 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS message_attachments;
 DROP TABLE IF EXISTS chat_messages;
 DROP TABLE IF EXISTS prescriptions;
+DROP TABLE IF EXISTS medication_inventory;
 DROP TABLE IF EXISTS payment_events;
 DROP TABLE IF EXISTS medical_certificates;
 DROP TABLE IF EXISTS triage_submissions;
@@ -39,6 +40,9 @@ CREATE TABLE users (
     -- Password-reset (hashed, single-use, time-limited token)
     reset_token_hash VARCHAR(64) NULL,
     reset_expires_at TIMESTAMP NULL DEFAULT NULL,
+    -- Per-doctor MC signing keypair (Ed25519). Private key is encrypted at rest.
+    mc_public_key TEXT NULL,
+    mc_private_key_encrypted TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login TIMESTAMP NULL DEFAULT NULL,
     deleted_at TIMESTAMP NULL DEFAULT NULL,

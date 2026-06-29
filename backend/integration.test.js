@@ -340,3 +340,33 @@ test('pharmacy: a patient cannot fulfil prescriptions (RBAC)', async () => {
   const res = await api('/api/prescriptions/RX-anything/fulfil', { method: 'POST', session: mintSession(SEED_PATIENT), csrf });
   assert.equal(res.status, 403);
 });
+
+// --- Phase 6: Asymmetric (Ed25519) MC signing + public verification -------
+test('MC is signed with the doctor key and publicly verifiable; tamper fails', async () => {
+  const doctor = mintSession(SEED_DOCTOR);
+  const csrf = await getCsrf();
+  // Seed consultation MH-C001 (doctor MH-U002 + patient MH-U006) has a Paid payment.
+  const issued = await api('/api/medical-certificates', {
+    method: 'POST', session: doctor, csrf,
+    body: { consultationId: 'MH-C001', patientId: 'MH-U006', diagnosis: 'Acute viral pharyngitis', validUntil: '2030-01-01' },
+  });
+  assert.equal(issued.status, 201);
+  const { verificationToken } = await issued.json();
+  assert.ok(verificationToken && verificationToken.includes('.'));
+
+  // Public QR verification succeeds and returns only minimal, non-PHI fields.
+  const ok = await api(`/api/verify/mc/${verificationToken}`);
+  assert.equal(ok.status, 200);
+  const body = await ok.json();
+  assert.equal(body.valid, true);
+  assert.equal('diagnosis' in body, false);
+
+  // A tampered token must fail signature verification.
+  const tampered = await api(`/api/verify/mc/${verificationToken.slice(0, -2)}AA`);
+  assert.ok([400, 404].includes(tampered.status));
+
+  // The doctor now has a stored public key (private key is encrypted at rest).
+  const [rows] = await db.execute('SELECT mc_public_key, mc_private_key_encrypted FROM users WHERE user_id = ?', [SEED_DOCTOR.user_id]);
+  assert.ok(rows[0].mc_public_key.includes('BEGIN PUBLIC KEY'));
+  assert.equal(rows[0].mc_private_key_encrypted.startsWith('v1:'), true);
+});

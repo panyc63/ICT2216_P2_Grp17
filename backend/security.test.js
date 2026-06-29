@@ -17,6 +17,10 @@ import {
   scanAttachmentMetadata,
   signJwt,
   signMcToken,
+  signMcTokenAsym,
+  generateMcKeyPair,
+  decodeMcPayload,
+  verifyMcTokenAsym,
   verifyJwt,
   verifyMcToken,
   verifyPassword,
@@ -120,6 +124,19 @@ test('MC verification token detects tampering', () => {
 test('MC token signed with another key is rejected', () => {
   const token = signMcToken({ mc_id: 'MH-MC002' }, config.mcSigningKey);
   assert.throws(() => verifyMcToken(token, 'a-different-signing-key'));
+});
+
+test('Ed25519 MC signing verifies, detects tampering, and rejects the wrong key', () => {
+  const doctorA = generateMcKeyPair();
+  const doctorB = generateMcKeyPair();
+  const token = signMcTokenAsym({ mc_id: 'MH-MC100', doctor_id: 'MH-U002' }, doctorA.privateKeyPem);
+  assert.equal(verifyMcTokenAsym(token, doctorA.publicKeyPem).mc_id, 'MH-MC100');
+  // Another doctor's public key must NOT verify (non-repudiation).
+  assert.throws(() => verifyMcTokenAsym(token, doctorB.publicKeyPem));
+  // Tampered token must fail.
+  assert.throws(() => verifyMcTokenAsym(`${token}x`, doctorA.publicKeyPem));
+  // Payload is readable (unverified) but untrusted until the signature is checked.
+  assert.equal(decodeMcPayload(token).doctor_id, 'MH-U002');
 });
 
 // =========================================================================

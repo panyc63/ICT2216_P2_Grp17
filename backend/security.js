@@ -234,6 +234,40 @@ export function verifyMcToken(token, secret) {
   return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
 }
 
+// --- Asymmetric MC signing (Ed25519) -------------------------------------
+// Each doctor owns a keypair; MCs are signed with the doctor's PRIVATE key and
+// verified by anyone holding the PUBLIC key (true non-repudiation, matching the
+// Deliverable 1 design "signed by the doctor's private cryptographic key").
+export function generateMcKeyPair() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  return {
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+  };
+}
+
+export function signMcTokenAsym(payload, privateKeyPem) {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.sign(null, Buffer.from(encoded), privateKeyPem).toString('base64url');
+  return `${encoded}.${signature}`;
+}
+
+// Decode the payload WITHOUT verifying (used only to locate the signing doctor;
+// the signature is then verified cryptographically against that doctor's key).
+export function decodeMcPayload(token) {
+  const [encoded] = String(token).split('.');
+  if (!encoded) throw new Error('Malformed MC token.');
+  return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+}
+
+export function verifyMcTokenAsym(token, publicKeyPem) {
+  const [encoded, signature] = String(token).split('.');
+  if (!encoded || !signature) throw new Error('Malformed MC token.');
+  const ok = crypto.verify(null, Buffer.from(encoded), publicKeyPem, Buffer.from(signature, 'base64url'));
+  if (!ok) throw new Error('Invalid MC token signature.');
+  return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+}
+
 export function isPasswordHash(value) {
   return typeof value === 'string' && value.startsWith('scrypt$');
 }
