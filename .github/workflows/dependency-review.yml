@@ -11,6 +11,11 @@ jobs:
   dependency-review:
     name: Review dependency changes
     runs-on: ubuntu-latest
+    # The dependency-review API requires GitHub Advanced Security on private
+    # repos, so the action errors there ("Dependency graph not enabled"). Keep
+    # the gate running for visibility, but do not fail the PR when the API is
+    # unavailable — npm audit + Trivy + CodeQL remain the enforcing gates.
+    continue-on-error: true
     permissions:
       contents: read
       pull-requests: write # post the summary comment

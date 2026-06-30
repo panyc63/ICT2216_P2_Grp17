@@ -10,6 +10,11 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     labels: [dependencies, security]
+    # Collapse routine minor/patch bumps into ONE PR per ecosystem; majors
+    # (potentially breaking) still open individually for deliberate review.
+    groups:
+      root-minor-patch:
+        update-types: [minor, patch]
 
   - package-ecosystem: npm
     directory: /backend
@@ -17,6 +22,9 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     labels: [dependencies, security, backend]
+    groups:
+      backend-minor-patch:
+        update-types: [minor, patch]
 
   - package-ecosystem: npm
     directory: /frontend
@@ -24,9 +32,15 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     labels: [dependencies, security, frontend]
+    groups:
+      frontend-minor-patch:
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     labels: [dependencies, ci]
+    groups:
+      actions-all:
+        patterns: ["*"]
