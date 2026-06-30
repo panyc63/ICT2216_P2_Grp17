@@ -67,12 +67,15 @@ Error/Logging (PHI-safe structured errors, append-only audit), V13 API security
   primitives and runtime authorization.
 - Production-only controls (WAF, KMS, RDS encryption, Firebase rules, TLS 1.3 termination)
   are **deployment requirements** documented in the architecture, not enforced by CI.
-- **DAST (OWASP ZAP baseline)** against the live site returns **0 FAIL / 61 PASS**, including
-  `Insufficient Site Isolation Against Spectre [90004]` now **PASS** (the COOP/COEP/CORP isolation
-  headers above). Remaining low-severity warnings are triaged:
-  - `Strict-Transport-Security Not Set [10035]` → fixed by **HSTS at the Caddy edge** (`Caddyfile`).
+- **DAST (OWASP ZAP baseline)** against the live site returns **0 FAIL / 62 PASS**, including
+  `Strict-Transport-Security Header [10035]` and `Insufficient Site Isolation Against Spectre
+  [90004]` both now **PASS** (HSTS at the Caddy edge + the COOP/COEP/CORP isolation headers above).
+  Remaining low-severity warnings are triaged:
   - `CSP: Directive with No Fallback [10055]` → fixed by adding `form-action`/`object-src` to the
-    SPA CSP (`frontend/nginx.conf`).
+    SPA CSP. ZAP then reports the residual `CSP: style-src unsafe-inline [10055]`, which is
+    **accepted**: `script-src` stays strict `'self'` (the XSS-execution vector is closed), and
+    `style-src 'unsafe-inline'` is required by a dynamic UI element (`hardwareCheck.vue` mic-level
+    meter via `:style`). Style-only inline is low-risk (no code execution).
   - `Re-examine Cache-control [10015]` / `Storable and Cacheable [10049]` → **accepted**: hashed,
     immutable JS/CSS assets are intentionally cacheable; the SPA shell is small and non-sensitive.
   - `Timestamp Disclosure [10096]` → **false positive** (digit sequences inside the minified bundle).
