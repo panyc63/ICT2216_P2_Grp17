@@ -146,6 +146,7 @@ app.post('/api/triage', triageLimit, asyncHandler(authenticate), requireRole('Pa
 app.get('/api/nurse/queue', asyncHandler(authenticate), requireRole('Nurse', 'Doctor', 'Admin'), asyncHandler(listQueue));
 app.patch('/api/nurse/queue/:id', asyncHandler(authenticate), requireRole('Nurse', 'Admin'), asyncHandler(updateQueue));
 
+app.get('/api/payments/quote', paymentLimit, asyncHandler(authenticate), requireRole('Patient'), asyncHandler(getCheckoutQuote));
 app.post('/api/payments/checkout', paymentLimit, asyncHandler(authenticate), requireRole('Patient'), asyncHandler(createCheckout));
 app.get('/api/payments/:id', asyncHandler(authenticate), asyncHandler(getPayment));
 
@@ -835,20 +836,57 @@ async function updateQueue(req, res) {
   res.status(200).json({ message: 'Queue updated.' });
 }
 
+// Flat consultation fee (cents). Medication charges are summed from the patient's
+// own prescriptions, so the total is derived server-side from real data — any
+// client-supplied amount is ignored (no client trust for financial values).
+const CONSULTATION_FEE_CENTS = 4500;
+
+async function computeCheckoutAmount(patientId, consultationId) {
+  // Two static queries (no string interpolation into SQL) keep this injection-safe.
+  let rows;
+  if (consultationId) {
+    rows = await query(
+      `SELECT COALESCE(SUM(mi.unit_price_cents), 0) AS meds_cents
+       FROM prescriptions p JOIN medication_inventory mi ON mi.medication_id = p.medication_id
+       WHERE p.patient_id = ? AND p.status <> 'Cancelled' AND p.consultation_id = ?`,
+      [patientId, consultationId]
+    );
+  } else {
+    rows = await query(
+      `SELECT COALESCE(SUM(mi.unit_price_cents), 0) AS meds_cents
+       FROM prescriptions p JOIN medication_inventory mi ON mi.medication_id = p.medication_id
+       WHERE p.patient_id = ? AND p.status <> 'Cancelled'`,
+      [patientId]
+    );
+  }
+  const medicationCents = Number(rows[0]?.meds_cents || 0);
+  return { consultationFeeCents: CONSULTATION_FEE_CENTS, medicationCents, amountCents: CONSULTATION_FEE_CENTS + medicationCents };
+}
+
+// Read-only price quote so the UI can show the real total before checkout, without
+// creating a payment_event on every page view.
+async function getCheckoutQuote(req, res) {
+  const consultationId = assertOptionalString(req.query.consultationId, 'consultationId', { min: 4, max: 36 });
+  const quote = await computeCheckoutAmount(req.user.user_id, consultationId);
+  res.status(200).json({ ...quote, currency: 'SGD' });
+}
+
 async function createCheckout(req, res) {
   const consultationId = assertOptionalString(req.body.consultationId, 'consultationId', { min: 4, max: 36 });
-  const amountCents = 7350;
+  const { amountCents, consultationFeeCents, medicationCents } = await computeCheckoutAmount(req.user.user_id, consultationId);
   const reference = `MF-CHK-${Date.now()}`;
   const result = await execute(
     `INSERT INTO payment_events (patient_id, consultation_id, checkout_reference, amount_cents, currency, status)
      VALUES (?, ?, ?, ?, 'SGD', 'Pending')`,
     [req.user.user_id, consultationId, reference, amountCents]
   );
-  await writeAudit(req, { actorId: req.user.user_id, action: 'CREATE_CHECKOUT', resourceType: 'PAYMENT', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { amountCents, consultationId } });
+  await writeAudit(req, { actorId: req.user.user_id, action: 'CREATE_CHECKOUT', resourceType: 'PAYMENT', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { amountCents, consultationFeeCents, medicationCents, consultationId } });
   res.status(201).json({
     paymentId: result.insertId,
     checkoutReference: reference,
     amountCents,
+    consultationFeeCents,
+    medicationCents,
     currency: 'SGD',
     status: 'Pending',
     checkoutUrl: `https://checkout.stripe.com/c/pay/${reference}`,

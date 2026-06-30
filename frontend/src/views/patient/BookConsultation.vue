@@ -1,88 +1,92 @@
 <template>
   <div>
-    <div class="mb-6">
-      <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Book a Consultation</h1>
-      <p class="text-sm text-slate-500">Choose an available time slot with one of our doctors.</p>
-    </div>
-
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-3xl">
+    <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold text-slate-900 tracking-tight">My Consultations</h1>
+        <p class="text-sm text-slate-500">Request a tele-consultation; a doctor will pick it up, then you can chat in real time.</p>
+      </div>
       <button
-        v-for="slot in slots"
-        :key="slot.id"
-        @click="selectSlot(slot)"
-        :disabled="!slot.available"
-        :aria-pressed="selectedSlotId === slot.id"
-        :aria-label="`${slot.date} ${slot.time} with ${slot.doctor}${slot.available ? '' : ' — fully booked'}`"
-        :class="[
-          selectedSlotId === slot.id
-            ? 'border-indigo-600 ring-2 ring-indigo-500 bg-indigo-50'
-            : 'border-slate-200 bg-white hover:border-slate-300',
-          !slot.available ? 'opacity-50 cursor-not-allowed' : ''
-        ]"
-        class="text-left border rounded-xl p-4 shadow-sm transition-all"
+        @click="requestConsultation"
+        :disabled="requesting"
+        class="px-4 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        <p class="text-sm font-bold text-slate-900">{{ slot.date }}</p>
-        <p class="text-sm text-slate-600">{{ slot.time }}</p>
-        <p class="text-xs text-slate-400 mt-2">{{ slot.doctor }}</p>
-        <p v-if="!slot.available" class="text-xs font-semibold text-red-500 mt-1">Fully booked</p>
+        {{ requesting ? 'Requesting…' : '+ Request Consultation' }}
       </button>
     </div>
 
-    <div class="mt-8 max-w-3xl flex items-center gap-4">
-      <button
-        @click="confirmBooking"
-        :disabled="selectedSlotId === null"
-        class="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        Confirm Booking
-      </button>
-      <p v-if="confirmed && bookedRef" role="status" class="text-sm font-medium text-emerald-600">
-        Booked ({{ bookedRef }}) — status: {{ bookedStatus }}. A doctor will pick up your consultation shortly.
-      </p>
-      <p v-if="error" role="alert" class="text-sm font-medium text-red-600">{{ error }}</p>
+    <p v-if="error" role="alert" class="mb-4 text-sm font-medium text-red-600">{{ error }}</p>
+    <p v-if="notice" role="status" class="mb-4 text-sm font-medium text-emerald-600">{{ notice }}</p>
+
+    <div v-if="!consultations.length" class="bg-white border border-slate-200 rounded-xl p-10 text-center text-slate-500 max-w-3xl">
+      No consultations yet. Click <span class="font-semibold">“Request Consultation”</span> to start one.
+    </div>
+
+    <div v-else class="grid gap-4 max-w-3xl">
+      <div v-for="c in consultations" :key="c.consultation_id" class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-bold text-slate-900">{{ c.consultation_id }}</p>
+            <p class="text-xs text-slate-500 mt-0.5">Doctor: {{ c.doctor_name || 'Awaiting assignment' }}</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <span :class="statusClass(c.session_status)" class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset">
+              {{ c.session_status }}
+            </span>
+            <button @click="toggleChat(c.consultation_id)" class="text-xs font-semibold text-indigo-600 hover:underline">
+              {{ openChatId === c.consultation_id ? 'Hide chat' : 'Open chat' }}
+            </button>
+          </div>
+        </div>
+        <div v-if="openChatId === c.consultation_id" class="mt-4">
+          <ChatPanel :consultation-id="c.consultation_id" />
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
-import { patientStore } from '../../store/patientStore'
+import { ref, onMounted } from 'vue'
 import { apiFetch } from '../../services/api'
+import ChatPanel from '../../components/ChatPanel.vue'
 
-const slots = ref([
-  { id: 1, date: 'Mon, 22 Jun', time: '09:00 AM', doctor: 'Dr. John Doe', available: true },
-  { id: 2, date: 'Mon, 22 Jun', time: '11:30 AM', doctor: 'Dr. Sarah Lin', available: true },
-  { id: 3, date: 'Tue, 23 Jun', time: '02:00 PM', doctor: 'Dr. John Doe', available: false },
-  { id: 4, date: 'Wed, 24 Jun', time: '10:15 AM', doctor: 'Dr. Amir Rahman', available: true },
-  { id: 5, date: 'Thu, 25 Jun', time: '04:45 PM', doctor: 'Dr. Sarah Lin', available: true },
-  { id: 6, date: 'Fri, 26 Jun', time: '01:00 PM', doctor: 'Dr. Amir Rahman', available: true }
-])
-
-const confirmed = ref(false)
-const bookedRef = ref('')
-const bookedStatus = ref('')
+const consultations = ref([])
+const requesting = ref(false)
 const error = ref('')
+const notice = ref('')
+const openChatId = ref('')
 
-// selectedSlotId lives in the shared store so the choice survives navigation.
-const selectedSlotId = computed(() => patientStore.booking.selectedSlotId)
-const selectedSlot = computed(() => slots.value.find(s => s.id === selectedSlotId.value) || null)
-
-const selectSlot = (slot) => {
-  if (!slot.available) return
-  patientStore.booking.selectedSlotId = slot.id
-  confirmed.value = false
-}
-
-const confirmBooking = async () => {
-  if (selectedSlotId.value === null) return
-  error.value = ''
+const load = async () => {
   try {
-    const res = await apiFetch('/consultations', { method: 'POST', body: JSON.stringify({}) })
-    bookedRef.value = res.consultationId
-    bookedStatus.value = res.status
-    confirmed.value = true
+    consultations.value = await apiFetch('/consultations')
   } catch (err) {
-    error.value = err.message || 'Could not book the consultation.'
+    error.value = err.message || 'Could not load consultations.'
   }
 }
+
+const requestConsultation = async () => {
+  requesting.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const res = await apiFetch('/consultations', { method: 'POST', body: JSON.stringify({}) })
+    notice.value = `Consultation ${res.consultationId} requested — status: ${res.status}.`
+    await load()
+  } catch (err) {
+    error.value = err.message || 'Could not request a consultation.'
+  } finally {
+    requesting.value = false
+  }
+}
+
+const toggleChat = (id) => { openChatId.value = openChatId.value === id ? '' : id }
+
+const statusClass = (s) => ({
+  Active: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
+  Pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+  Completed: 'bg-slate-100 text-slate-600 ring-slate-500/20',
+  Cancelled: 'bg-red-50 text-red-700 ring-red-600/20',
+}[s] || 'bg-slate-100 text-slate-600 ring-slate-500/20')
+
+onMounted(load)
 </script>

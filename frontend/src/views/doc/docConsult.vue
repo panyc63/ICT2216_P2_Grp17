@@ -62,6 +62,12 @@
               <button v-if="!room.doctor_id && room.session_status === 'Pending'" @click="act(room, 'claim')" class="flex-1 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white font-medium text-sm rounded-lg">Claim</button>
               <button v-if="room.doctor_id && room.session_status === 'Pending'" @click="act(room, 'start')" class="flex-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg">Start</button>
               <button v-if="room.session_status === 'Active'" @click="act(room, 'complete')" class="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm rounded-lg">Complete</button>
+              <button v-if="room.doctor_id" @click="toggleChat(room.consultation_id)" class="flex-1 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-sm rounded-lg">
+                {{ openChatId === room.consultation_id ? 'Hide Chat' : 'Chat' }}
+              </button>
+            </div>
+            <div v-if="openChatId === room.consultation_id" class="mt-4">
+              <ChatPanel :consultation-id="room.consultation_id" />
             </div>
           </div>
         </div>
@@ -101,9 +107,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch, logout } from '../../services/api'
+import ChatPanel from '../../components/ChatPanel.vue'
 
 const router = useRouter()
 const activeTab = ref('my-consultations')
+const openChatId = ref('')
+const toggleChat = (id) => { openChatId.value = openChatId.value === id ? '' : id }
 
 const currentUser = ref({ name: '', role: 'Doctor' })
 const consultations = ref([])

@@ -47,6 +47,24 @@
         </div>
 
         <div>
+          <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Today's Queue</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
+            <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
+              <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">Unclaimed Pending</span>
+              <span class="text-2xl font-black text-amber-500 block mt-1">{{ unclaimedPending }}</span>
+            </div>
+            <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
+              <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">My Active Sessions</span>
+              <span class="text-2xl font-black text-emerald-600 block mt-1">{{ myActive }}</span>
+            </div>
+            <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
+              <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">Assigned To Me</span>
+              <span class="text-2xl font-black text-indigo-600 block mt-1">{{ myAssigned }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
           <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Available Medical Applications</h3>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             
@@ -77,18 +95,39 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { logout } from '../../services/api'
+import { apiFetch, logout } from '../../services/api'
 
 // Grab router instances
 const router = useRouter()
 const route = useRoute()
 
-const currentDoctor = ref({
-  name: 'Dr. John Doe',
-  specialty: 'General Internal Medicine'
-})
+const currentDoctor = ref({ name: 'Doctor', specialty: 'Practitioner Portal' })
+const meId = ref('')
+const consultations = ref([])
+
+const loadMe = async () => {
+  try {
+    const me = await apiFetch('/me')
+    meId.value = me.user?.user_id || ''
+    currentDoctor.value = { name: me.user?.name || 'Doctor', specialty: me.user?.role || 'Doctor' }
+  } catch { /* not signed in */ }
+}
+
+const loadConsultations = async () => {
+  try { consultations.value = await apiFetch('/consultations') } catch { consultations.value = [] }
+}
+
+onMounted(async () => { await loadMe(); await loadConsultations() })
+
+// Live summary computed from the real, role-scoped consultation list.
+const unclaimedPending = computed(() =>
+  consultations.value.filter((c) => !c.doctor_id && c.session_status === 'Pending').length)
+const myActive = computed(() =>
+  consultations.value.filter((c) => c.session_status === 'Active' && String(c.doctor_id) === String(meId.value)).length)
+const myAssigned = computed(() =>
+  consultations.value.filter((c) => String(c.doctor_id) === String(meId.value)).length)
 
 // Central route handling function
 const navigateTo = (routeName) => {

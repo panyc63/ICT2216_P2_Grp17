@@ -33,8 +33,26 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      clamav:
+        condition: service_started # don't block boot on the slow AV DB load; uploads fail-closed until ready
     expose:
       - "5000"
+
+  # ClamAV daemon for real upload malware scanning (Phase 4). The backend streams
+  # uploads to clamav:3310 (CLAMD_HOST/CLAMD_PORT). First start downloads signature
+  # DBs (~1 GB, needs ~2 GB RAM); if the VM is too small, drop this service and the
+  # backend falls back to the EICAR stub.
+  clamav:
+    image: clamav/clamav:stable
+    restart: unless-stopped
+    expose:
+      - "3310"
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
 
   frontend:
     build:

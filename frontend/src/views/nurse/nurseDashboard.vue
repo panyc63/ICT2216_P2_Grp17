@@ -4,7 +4,7 @@
       <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-2">MediFlow Nurse</div>
       <div class="mb-8 border-b border-slate-800 pb-4">
         <p class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Active Station</p>
-        <p class="text-sm font-bold text-white mt-1">Nurse Clara Oswald</p>
+        <p class="text-sm font-bold text-white mt-1">{{ nurseName }}</p>
         <span class="inline-flex items-center rounded-md bg-emerald-500/10 text-emerald-400 px-2 py-0.5 text-xs font-medium ring-1 ring-inset ring-emerald-500/20 mt-1">Triage Floor 1</span>
       </div>
       <nav class="space-y-1 flex-1">
@@ -23,16 +23,16 @@
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
         <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
-          <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">In-Clinic Queue Total</span>
-          <span class="text-2xl font-black text-indigo-600 block mt-1">4 Active Patients</span>
+          <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">Patients In Queue</span>
+          <span class="text-2xl font-black text-indigo-600 block mt-1">{{ totalActive }}</span>
         </div>
         <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
-          <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">Operational Doctors</span>
-          <span class="text-2xl font-black text-emerald-600 block mt-1">2 Assigned</span>
+          <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">Emergency / Urgent</span>
+          <span class="text-2xl font-black text-amber-500 block mt-1">{{ highPriority }}</span>
         </div>
         <div class="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
-          <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">Avg Triage Speed</span>
-          <span class="text-2xl font-black text-amber-500 block mt-1">11 mins</span>
+          <span class="text-xs text-slate-400 font-bold uppercase tracking-wider block">Assigned To A Doctor</span>
+          <span class="text-2xl font-black text-emerald-600 block mt-1">{{ assignedCount }}</span>
         </div>
       </div>
 
@@ -59,8 +59,30 @@
 </template>
 
 <script setup>
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { logout } from '../../services/api'
+import { apiFetch, logout } from '../../services/api'
 const router = useRouter()
+
+const nurseName = ref('Nurse')
+const queue = ref([])
+
+onMounted(async () => {
+  try {
+    const me = await apiFetch('/me')
+    nurseName.value = me.user?.name || 'Nurse'
+  } catch { /* not signed in */ }
+  try {
+    queue.value = await apiFetch('/nurse/queue')
+  } catch {
+    queue.value = []
+  }
+})
+
+// Real counts from the triage queue (same endpoint as the Live Queue Monitor).
+const totalActive = computed(() => queue.value.length)
+const highPriority = computed(() => queue.value.filter((q) => ['Emergency', 'Urgent'].includes(q.priority_score)).length)
+const assignedCount = computed(() => queue.value.filter((q) => q.assigned_doctor_id).length)
+
 const handleLogout = () => { logout(router) }
 </script>

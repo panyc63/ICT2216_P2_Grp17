@@ -290,6 +290,55 @@ test('object-level: a doctor cannot act on a consultation assigned to another do
   assert.equal(intruderStart.status, 403);
 });
 
+// --- Phase 4: chat (MySQL, encrypted) object-level authorization ----------
+test('chat: owner patient + assigned doctor exchange messages; a different patient is blocked', async () => {
+  await db.execute(
+    `INSERT INTO users (user_id, name, email, password_hash, role, is_verified, status, token_version)
+     VALUES ('MH-CINTRUDER', 'Other Patient', 'other-pt@example.com', 'scrypt$16384$8$1$x$bm9o', 'Patient', TRUE, 'Active', 0)
+     ON DUPLICATE KEY UPDATE status='Active', token_version=0`
+  );
+  const patient = mintSession(SEED_PATIENT);
+  const doctor = mintSession(SEED_DOCTOR);
+  const intruder = mintSession({ user_id: 'MH-CINTRUDER', email: 'other-pt@example.com', role: 'Patient', token_version: 0 });
+  const csrf = await getCsrf();
+
+  const { consultationId } = await (await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} })).json();
+  await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action: 'claim' } });
+
+  // Owner patient posts; assigned doctor reads the decrypted body.
+  const sent = await api(`/api/consultations/${consultationId}/messages`, { method: 'POST', session: patient, csrf, body: { messageBody: 'Hello doctor' } });
+  assert.equal(sent.status, 201);
+  const docRead = await api(`/api/consultations/${consultationId}/messages`, { session: doctor });
+  assert.equal(docRead.status, 200);
+  assert.equal((await docRead.json()).some((m) => m.messageBody === 'Hello doctor'), true);
+
+  // A different patient can neither read nor post (object-level authz).
+  assert.equal((await api(`/api/consultations/${consultationId}/messages`, { session: intruder })).status, 403);
+  const intruderPost = await api(`/api/consultations/${consultationId}/messages`, { method: 'POST', session: intruder, csrf, body: { messageBody: 'sneaky' } });
+  assert.equal(intruderPost.status, 403);
+});
+
+// --- Payment: amount is computed server-side, never trusted from the client -
+test('payment: checkout amount is server-derived and ignores a client-supplied amount', async () => {
+  const patient = mintSession(SEED_PATIENT);
+  const csrf = await getCsrf();
+
+  const quote = await (await api('/api/payments/quote', { session: patient })).json();
+  assert.equal(typeof quote.amountCents, 'number');
+  assert.equal(quote.amountCents, quote.consultationFeeCents + quote.medicationCents);
+  assert.ok(quote.consultationFeeCents > 0);
+
+  // Malicious client tries to pay 1 cent; the server must ignore req.body.amountCents.
+  const res = await api('/api/payments/checkout', { method: 'POST', session: patient, csrf, body: { amountCents: 1 } });
+  assert.equal(res.status, 201);
+  const checkout = await res.json();
+  assert.equal(checkout.amountCents, quote.amountCents);
+  assert.notEqual(checkout.amountCents, 1);
+
+  const [rows] = await db.execute('SELECT amount_cents FROM payment_events WHERE checkout_reference = ?', [checkout.checkoutReference]);
+  assert.equal(rows[0].amount_cents, quote.amountCents);
+});
+
 // --- Phase 3: Pharmacy inventory + fulfilment -----------------------------
 const SEED_PHARMACIST = { user_id: 'MH-U004', email: 'pharmacy@mediflow.com', role: 'Pharmacist', token_version: 0 };
 
