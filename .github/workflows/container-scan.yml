@@ -24,8 +24,8 @@ jobs:
       matrix:
         dockerfile: [backend/Dockerfile, frontend/Dockerfile]
     steps:
-      - uses: actions/checkout@v4
-      - uses: hadolint/hadolint-action@v3.1.0
+      - uses: actions/checkout@v7
+      - uses: hadolint/hadolint-action@v3.3.0
         with:
           dockerfile: ${{ matrix.dockerfile }}
           failure-threshold: warning
@@ -37,7 +37,7 @@ jobs:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Install Trivy from its apt repo (robust — avoids action tag-resolution issues).
       - name: Install Trivy
@@ -58,7 +58,7 @@ jobs:
 
       - name: Upload Trivy SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
           category: trivy

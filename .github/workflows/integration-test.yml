@@ -50,9 +50,9 @@ jobs:
       CORS_ORIGINS: http://127.0.0.1:5173
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           cache: npm
