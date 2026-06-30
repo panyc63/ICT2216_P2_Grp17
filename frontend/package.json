@@ -10,7 +10,7 @@
   "dependencies": {
     "jspdf": "^4.2.1",
     "vue": "^3.4.0",
-    "vue-router": "^4.3.0"
+    "vue-router": "^5.1.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",
