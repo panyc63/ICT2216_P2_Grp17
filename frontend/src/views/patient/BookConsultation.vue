@@ -11,6 +11,8 @@
         :key="slot.id"
         @click="selectSlot(slot)"
         :disabled="!slot.available"
+        :aria-pressed="selectedSlotId === slot.id"
+        :aria-label="`${slot.date} ${slot.time} with ${slot.doctor}${slot.available ? '' : ' — fully booked'}`"
         :class="[
           selectedSlotId === slot.id
             ? 'border-indigo-600 ring-2 ring-indigo-500 bg-indigo-50'
@@ -34,10 +36,10 @@
       >
         Confirm Booking
       </button>
-      <p v-if="confirmed && bookedRef" class="text-sm font-medium text-emerald-600">
+      <p v-if="confirmed && bookedRef" role="status" class="text-sm font-medium text-emerald-600">
         Booked ({{ bookedRef }}) — status: {{ bookedStatus }}. A doctor will pick up your consultation shortly.
       </p>
-      <p v-if="error" class="text-sm font-medium text-red-600">{{ error }}</p>
+      <p v-if="error" role="alert" class="text-sm font-medium text-red-600">{{ error }}</p>
     </div>
   </div>
 </template>

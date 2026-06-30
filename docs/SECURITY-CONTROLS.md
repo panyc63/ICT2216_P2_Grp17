@@ -16,6 +16,7 @@ Legend: **U** = unit test (`backend/security.test.js`), **I** = integration test
 | **Cryptographic non-repudiation** (signed MC + QR) | `security.js` → `signMcToken` / `verifyMcToken`; `server.js` → `createMedicalCertificate`, `verifyMedicalCertificate` | CodeQL, Semgrep, **Gitleaks** (signing key) | **U**: MC tamper rejected; MC signed with other key rejected. **I**: minimal QR response |
 | **Input validation & payload scanning** | `security.js` → `assertString/assertEmail/assertEnum/assertPositiveInteger`, `scanAttachmentMetadata` | Semgrep/CodeQL (injection) | **U**: validators reject SQLi/XSS payloads; attachment scan blocks unsafe/oversize/eicar |
 | **TLS / E2E + security headers** | `security.js` → `applySecurityHeaders` (HSTS, CSP, X-Frame, nosniff); nginx `frontend/nginx.conf` | **ZAP DAST**, Trivy | **U**: required headers present |
+| **Cross-origin isolation** (COOP/COEP/CORP) | `frontend/nginx.conf` (SPA edge: COOP+CORP+COEP `require-corp`); `security.js` → `applySecurityHeaders` (COOP always, CORP production-gated) | **ZAP DAST** (alert 90004) | **U**: COOP + CORP asserted in header test |
 | **Secure payment verification** (Stripe webhook) | `server.js` → `handlePaymentWebhook`, `verifyStripeSignature`, idempotency via `stripe_event_id` | CodeQL, **custom Semgrep** (`trust-client-financial-status`) | **I**: webhook rejects missing/forged signature |
 | **RBAC + object-level authorization** | `server.js` → `requireRole`, `canAccessPatientRecord`, `ensureAssignedDoctor`, `ensureConsultationAccess` | CodeQL, Semgrep | **I**: 401 unauthenticated; 403 wrong role; 403 cross-patient; 200 correct role/owner |
 | **Rate limiting** | `security.js` → `rateLimit`; `server.js` → per-endpoint limiters (auth/login/triage/chat/payment/mc-verify) | — | **U**: limiter returns 429 over budget. **I**: login brute force → 429 |
@@ -46,7 +47,8 @@ V2 Authentication (MFA, scrypt, lockout fields), V3 Session Management (JWT TTL,
 revocation), V4 Access Control (RBAC, object-level), V5 Validation/Encoding (`assert*`,
 parameterised SQL), V6 Stored Cryptography (AES-GCM, HMAC, signing-key isolation), V7
 Error/Logging (PHI-safe structured errors, append-only audit), V13 API security
-(CSRF double-submit, rate limiting, webhook signature).
+(CSRF double-submit, rate limiting, webhook signature), V14 Configuration
+(secure response headers, cross-origin isolation COOP/COEP/CORP, no version disclosure).
 
 ## 4. PDPA alignment
 
@@ -65,6 +67,10 @@ Error/Logging (PHI-safe structured errors, append-only audit), V13 API security
   primitives and runtime authorization.
 - Production-only controls (WAF, KMS, RDS encryption, Firebase rules, TLS 1.3 termination)
   are **deployment requirements** documented in the architecture, not enforced by CI.
+- **DAST (OWASP ZAP baseline)** against the live site returns **0 FAIL**. The remaining
+  informational warnings were triaged: `Cross-Origin-Embedder-Policy missing [90004]` is now
+  addressed by the COOP/COEP/CORP isolation headers above (confirm on the post-deploy re-scan);
+  `Modern Web Application [10109]` is informational (SPA detection), not a defect.
 
 ---
 

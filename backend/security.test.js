@@ -186,6 +186,9 @@ test('security headers middleware sets hardening headers', () => {
   assert.equal(res.headers['x-content-type-options'], 'nosniff');
   assert.equal(res.headers['x-frame-options'], 'DENY');
   assert.match(res.headers['content-security-policy'], /default-src 'none'/);
+  // Cross-origin isolation headers (COOP always; CORP in production config).
+  assert.equal(res.headers['cross-origin-opener-policy'], 'same-origin');
+  assert.equal(res.headers['cross-origin-resource-policy'], 'same-origin');
   // HSTS only in production config.
   assert.match(res.headers['strict-transport-security'], /max-age=\d+/);
 });

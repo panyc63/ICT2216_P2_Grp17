@@ -69,7 +69,7 @@
     leave-to-class="opacity-0 scale-95"
   >
     <div v-if="toast.show" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 px-4">
-      <div class="bg-white border border-slate-200 w-full max-w-sm rounded-2xl p-6 shadow-xl text-center flex flex-col items-center gap-4">
+      <div :role="toast.isError ? 'alert' : 'status'" class="bg-white border border-slate-200 w-full max-w-sm rounded-2xl p-6 shadow-xl text-center flex flex-col items-center gap-4">
         
         <div :class="toast.isError ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'" class="w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold">
           {{ toast.isError ? '✕' : '✓' }}

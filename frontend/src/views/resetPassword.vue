@@ -20,12 +20,12 @@
         <button type="submit" :disabled="submitting || !token" class="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl hover:bg-indigo-700 disabled:opacity-60">
           {{ submitting ? 'Saving…' : 'Reset password' }}
         </button>
-        <p v-if="error" class="text-sm font-medium text-red-600 text-center">{{ error }}</p>
-        <p v-if="!token" class="text-sm font-medium text-amber-600 text-center">Missing reset token in the link.</p>
+        <p v-if="error" role="alert" class="text-sm font-medium text-red-600 text-center">{{ error }}</p>
+        <p v-if="!token" role="alert" class="text-sm font-medium text-amber-600 text-center">Missing reset token in the link.</p>
       </form>
 
       <div v-else class="text-center">
-        <p class="text-sm font-medium text-emerald-600 mb-4">Password reset successful.</p>
+        <p role="status" class="text-sm font-medium text-emerald-600 mb-4">Password reset successful.</p>
         <router-link to="/login" class="text-sm text-indigo-600 font-bold hover:underline">Go to sign in →</router-link>
       </div>
     </div>

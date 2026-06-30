@@ -43,7 +43,7 @@
             {{ submitting ? 'Sending…' : 'Send Reset Link' }}
           </button>
 
-          <p v-if="notice" class="text-sm font-medium text-emerald-600 text-center">{{ notice }}</p>
+          <p v-if="notice" role="status" aria-live="polite" class="text-sm font-medium text-emerald-600 text-center">{{ notice }}</p>
 
           <div class="text-center pt-2">
             <router-link to="/login" class="text-sm text-indigo-600 font-bold hover:underline transition-all">

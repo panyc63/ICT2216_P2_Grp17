@@ -68,8 +68,15 @@ export function applySecurityHeaders(config) {
       "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     );
     res.setHeader('Cache-Control', 'no-store');
+    // COOP isolates the browsing context group; it only affects window-opener
+    // relationships, so it is safe even when the dev frontend calls cross-origin.
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     if (config.isProduction) {
       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+      // CORP is production-only: prod is single-origin (nginx proxies /api), whereas
+      // dev calls the API cross-origin (localhost:5000) where same-origin CORP would
+      // block the fetch. Mirrors the HSTS production gate above.
+      res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     }
     next();
   };
