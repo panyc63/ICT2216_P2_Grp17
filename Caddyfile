@@ -8,6 +8,9 @@
 
 {$DOMAIN} {
 	encode zstd gzip
+	# HSTS at the TLS edge so every response (SPA shell, hashed assets, /api) is
+	# covered, not just the backend API. 1 year + includeSubDomains.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	# All traffic (static SPA + /api) goes to the frontend nginx container, which
 	# serves the built site and proxies /api -> backend. One public origin.
 	reverse_proxy frontend:8080

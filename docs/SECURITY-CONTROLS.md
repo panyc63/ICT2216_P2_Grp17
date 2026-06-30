@@ -15,7 +15,7 @@ Legend: **U** = unit test (`backend/security.test.js`), **I** = integration test
 | **MFA** for privileged roles/actions | `backend/server.js` → `completeLoginMfa`, `createMfaChallenge`, `requireRecentReauth`; `security.js` → `getConfig.mfaRequiredRoles` | CodeQL, Semgrep | Code-reviewed; re-auth window logic exercised by `requireRecentReauth` (full email-OTP flow is E2E/manual) |
 | **Cryptographic non-repudiation** (signed MC + QR) | `security.js` → `signMcToken` / `verifyMcToken`; `server.js` → `createMedicalCertificate`, `verifyMedicalCertificate` | CodeQL, Semgrep, **Gitleaks** (signing key) | **U**: MC tamper rejected; MC signed with other key rejected. **I**: minimal QR response |
 | **Input validation & payload scanning** | `security.js` → `assertString/assertEmail/assertEnum/assertPositiveInteger`, `scanAttachmentMetadata` | Semgrep/CodeQL (injection) | **U**: validators reject SQLi/XSS payloads; attachment scan blocks unsafe/oversize/eicar |
-| **TLS / E2E + security headers** | `security.js` → `applySecurityHeaders` (HSTS, CSP, X-Frame, nosniff); nginx `frontend/nginx.conf` | **ZAP DAST**, Trivy | **U**: required headers present |
+| **TLS / E2E + security headers** | `security.js` → `applySecurityHeaders` (HSTS, CSP, X-Frame, nosniff); nginx `frontend/nginx.conf` (CSP incl. `form-action`/`object-src`); **HSTS at the Caddy edge** (`Caddyfile`) covers all responses | **ZAP DAST**, Trivy | **U**: required headers present |
 | **Cross-origin isolation** (COOP/COEP/CORP) | `frontend/nginx.conf` (SPA edge: COOP+CORP+COEP `require-corp`); `security.js` → `applySecurityHeaders` (COOP always, CORP production-gated) | **ZAP DAST** (alert 90004) | **U**: COOP + CORP asserted in header test |
 | **Secure payment verification** (Stripe webhook) | `server.js` → `handlePaymentWebhook`, `verifyStripeSignature`, idempotency via `stripe_event_id` | CodeQL, **custom Semgrep** (`trust-client-financial-status`) | **I**: webhook rejects missing/forged signature |
 | **RBAC + object-level authorization** | `server.js` → `requireRole`, `canAccessPatientRecord`, `ensureAssignedDoctor`, `ensureConsultationAccess` | CodeQL, Semgrep | **I**: 401 unauthenticated; 403 wrong role; 403 cross-patient; 200 correct role/owner |
@@ -67,10 +67,16 @@ Error/Logging (PHI-safe structured errors, append-only audit), V13 API security
   primitives and runtime authorization.
 - Production-only controls (WAF, KMS, RDS encryption, Firebase rules, TLS 1.3 termination)
   are **deployment requirements** documented in the architecture, not enforced by CI.
-- **DAST (OWASP ZAP baseline)** against the live site returns **0 FAIL**. The remaining
-  informational warnings were triaged: `Cross-Origin-Embedder-Policy missing [90004]` is now
-  addressed by the COOP/COEP/CORP isolation headers above (confirm on the post-deploy re-scan);
-  `Modern Web Application [10109]` is informational (SPA detection), not a defect.
+- **DAST (OWASP ZAP baseline)** against the live site returns **0 FAIL / 61 PASS**, including
+  `Insufficient Site Isolation Against Spectre [90004]` now **PASS** (the COOP/COEP/CORP isolation
+  headers above). Remaining low-severity warnings are triaged:
+  - `Strict-Transport-Security Not Set [10035]` → fixed by **HSTS at the Caddy edge** (`Caddyfile`).
+  - `CSP: Directive with No Fallback [10055]` → fixed by adding `form-action`/`object-src` to the
+    SPA CSP (`frontend/nginx.conf`).
+  - `Re-examine Cache-control [10015]` / `Storable and Cacheable [10049]` → **accepted**: hashed,
+    immutable JS/CSS assets are intentionally cacheable; the SPA shell is small and non-sensitive.
+  - `Timestamp Disclosure [10096]` → **false positive** (digit sequences inside the minified bundle).
+  - `Modern Web Application [10109]` → informational SPA detection, not a defect.
 
 ---
 
