@@ -29,16 +29,25 @@
             <p class="text-xs text-slate-500 mt-0.5">Doctor: {{ c.doctor_name || 'Awaiting assignment' }}</p>
           </div>
           <div class="flex items-center gap-3">
+            <span v-if="c.priority" :class="priorityClass(c.priority)" class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset">
+              {{ c.priority }}
+            </span>
             <span :class="statusClass(c.session_status)" class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset">
               {{ c.session_status }}
             </span>
             <button @click="toggleChat(c.consultation_id)" class="text-xs font-semibold text-indigo-600 hover:underline">
               {{ openChatId === c.consultation_id ? 'Hide chat' : 'Open chat' }}
             </button>
+            <button @click="toggleVideo(c.consultation_id)" class="text-xs font-semibold text-indigo-600 hover:underline">
+              {{ openVideoId === c.consultation_id ? 'Hide video' : 'Video call' }}
+            </button>
           </div>
         </div>
         <div v-if="openChatId === c.consultation_id" class="mt-4">
           <ChatPanel :consultation-id="c.consultation_id" />
+        </div>
+        <div v-if="openVideoId === c.consultation_id" class="mt-4">
+          <VideoConsult :consultation-id="c.consultation_id" role="Patient" />
         </div>
       </div>
     </div>
@@ -49,12 +58,14 @@
 import { ref, onMounted } from 'vue'
 import { apiFetch } from '../../services/api'
 import ChatPanel from '../../components/ChatPanel.vue'
+import VideoConsult from '../../components/VideoConsult.vue'
 
 const consultations = ref([])
 const requesting = ref(false)
 const error = ref('')
 const notice = ref('')
 const openChatId = ref('')
+const openVideoId = ref('')
 
 const load = async () => {
   try {
@@ -80,6 +91,7 @@ const requestConsultation = async () => {
 }
 
 const toggleChat = (id) => { openChatId.value = openChatId.value === id ? '' : id }
+const toggleVideo = (id) => { openVideoId.value = openVideoId.value === id ? '' : id }
 
 const statusClass = (s) => ({
   Active: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
@@ -87,6 +99,12 @@ const statusClass = (s) => ({
   Completed: 'bg-slate-100 text-slate-600 ring-slate-500/20',
   Cancelled: 'bg-red-50 text-red-700 ring-red-600/20',
 }[s] || 'bg-slate-100 text-slate-600 ring-slate-500/20')
+
+const priorityClass = (p) => ({
+  Emergency: 'bg-red-50 text-red-700 ring-red-600/20',
+  Urgent: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+  Routine: 'bg-slate-100 text-slate-600 ring-slate-500/20',
+}[p] || 'bg-slate-100 text-slate-600 ring-slate-500/20')
 
 onMounted(load)
 </script>

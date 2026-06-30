@@ -65,9 +65,15 @@
               <button v-if="room.doctor_id" @click="toggleChat(room.consultation_id)" class="flex-1 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-sm rounded-lg">
                 {{ openChatId === room.consultation_id ? 'Hide Chat' : 'Chat' }}
               </button>
+              <button v-if="room.doctor_id" @click="toggleVideo(room.consultation_id)" class="flex-1 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-sm rounded-lg">
+                {{ openVideoId === room.consultation_id ? 'Hide Video' : 'Video' }}
+              </button>
             </div>
             <div v-if="openChatId === room.consultation_id" class="mt-4">
               <ChatPanel :consultation-id="room.consultation_id" />
+            </div>
+            <div v-if="openVideoId === room.consultation_id" class="mt-4">
+              <VideoConsult :consultation-id="room.consultation_id" role="Doctor" />
             </div>
           </div>
         </div>
@@ -108,11 +114,14 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch, logout } from '../../services/api'
 import ChatPanel from '../../components/ChatPanel.vue'
+import VideoConsult from '../../components/VideoConsult.vue'
 
 const router = useRouter()
 const activeTab = ref('my-consultations')
 const openChatId = ref('')
+const openVideoId = ref('')
 const toggleChat = (id) => { openChatId.value = openChatId.value === id ? '' : id }
+const toggleVideo = (id) => { openVideoId.value = openVideoId.value === id ? '' : id }
 
 const currentUser = ref({ name: '', role: 'Doctor' })
 const consultations = ref([])

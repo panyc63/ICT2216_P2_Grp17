@@ -48,6 +48,10 @@ export function getConfig() {
     firebasePrivateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
     turnSecret: process.env.TURN_SECRET || '',
     turnUrls: (process.env.TURN_URLS || '').split(',').map((u) => u.trim()).filter(Boolean),
+    // Managed TURN (e.g. Cloudflare/Metered) static long-term credentials — used when
+    // not self-hosting coturn. Optional: STUN-only still works for most P2P calls.
+    turnUsername: process.env.TURN_USERNAME || '',
+    turnCredential: process.env.TURN_CREDENTIAL || '',
   };
 
   if (missing.length > 0) {
@@ -560,4 +564,19 @@ export function makeTurnCredentials(config, ttlSeconds = 3600) {
   const username = String(Math.floor(Date.now() / 1000) + ttlSeconds);
   const credential = crypto.createHmac('sha1', config.turnSecret).update(username).digest('base64');
   return { username, credential, ttl: ttlSeconds, urls: config.turnUrls };
+}
+
+// Builds the WebRTC iceServers list. Public STUN is always present (NAT discovery,
+// outbound only — no server ports). A TURN relay is added when configured: a
+// self-hosted coturn (HMAC time-limited creds) OR a managed provider (static creds).
+// Media is P2P DTLS-SRTP and never traverses our server.
+export function buildIceServers(config) {
+  const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  const coturn = makeTurnCredentials(config);
+  if (coturn) {
+    iceServers.push({ urls: coturn.urls, username: coturn.username, credential: coturn.credential });
+  } else if (config.turnUrls.length > 0 && config.turnUsername && config.turnCredential) {
+    iceServers.push({ urls: config.turnUrls, username: config.turnUsername, credential: config.turnCredential });
+  }
+  return iceServers;
 }

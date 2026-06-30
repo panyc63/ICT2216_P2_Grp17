@@ -50,7 +50,7 @@ import {
   verifyMcTokenAsym,
   scanBufferForMalware,
   mintFirebaseCustomToken,
-  makeTurnCredentials,
+  buildIceServers,
   verifyJwt,
   verifyPassword,
 } from './security.js';
@@ -89,6 +89,8 @@ const triageLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'tr
 const chatLimit = rateLimit({ windowMs: 60 * 1000, max: 30, keyPrefix: 'chat' });
 const paymentLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'payment' });
 const verificationLimit = rateLimit({ windowMs: 60 * 1000, max: 20, keyPrefix: 'mc-verify' });
+// Signaling is polled during call setup (offer/answer/ICE), so it needs more headroom than chat.
+const signalLimit = rateLimit({ windowMs: 60 * 1000, max: 120, keyPrefix: 'signal' });
 
 // In-memory upload (max 5 MB) so the buffer can be malware-scanned before it ever touches disk.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -172,8 +174,11 @@ app.get('/api/attachments/:id', asyncHandler(authenticate), asyncHandler(downloa
 
 // Realtime (Phase 4): mint a Firebase custom token (role-claimed) for chat/queue/signaling.
 app.post('/api/realtime/token', asyncHandler(authenticate), asyncHandler(issueRealtimeToken));
-// WebRTC (Phase 5): short-lived TURN credentials + consent-gated recording metadata.
+// WebRTC (Phase 5): ICE servers (STUN + optional TURN), same-origin signaling relay,
+// and consent-gated recording metadata.
 app.get('/api/consultations/:id/rtc-credentials', asyncHandler(authenticate), asyncHandler(getRtcCredentials));
+app.post('/api/consultations/:id/signal', signalLimit, asyncHandler(authenticate), asyncHandler(postSignal));
+app.get('/api/consultations/:id/signal', signalLimit, asyncHandler(authenticate), asyncHandler(getSignals));
 app.post('/api/consultations/:id/recording', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), asyncHandler(startRecordingSession));
 
 app.use((err, req, res, _next) => {
@@ -702,8 +707,9 @@ async function deactivateStaff(req, res) {
 
 async function bookConsultation(req, res) {
   const consultationId = `MH-C-${Date.now()}`;
+  // Manual booking (no triage) defaults to Routine so it sorts after triaged urgent cases.
   await execute(
-    "INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status) VALUES (?, ?, NULL, 'Pending')",
+    "INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status, priority) VALUES (?, ?, NULL, 'Pending', 'Routine')",
     [consultationId, req.user.user_id]
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'BOOK_CONSULTATION', resourceType: 'CONSULTATION', resourceId: consultationId, outcome: 'SUCCESS' });
@@ -714,26 +720,26 @@ async function listConsultations(req, res) {
   let rows;
   if (req.user.role === 'Patient') {
     rows = await query(
-      `SELECT c.consultation_id, c.session_status, c.created_at, c.completed_at, d.name AS doctor_name
+      `SELECT c.consultation_id, c.session_status, c.priority, c.created_at, c.completed_at, d.name AS doctor_name
        FROM consultations c LEFT JOIN users d ON d.user_id = c.doctor_id
        WHERE c.patient_id = ? ORDER BY c.created_at DESC`,
       [req.user.user_id]
     );
   } else if (req.user.role === 'Doctor') {
-    // Assigned to me, plus the unclaimed pending pool.
+    // Assigned to me, plus the unclaimed pending pool; most urgent first within each state.
     rows = await query(
-      `SELECT c.consultation_id, c.patient_id, p.name AS patient_name, c.doctor_id, c.session_status, c.created_at
+      `SELECT c.consultation_id, c.patient_id, p.name AS patient_name, c.doctor_id, c.session_status, c.priority, c.created_at
        FROM consultations c JOIN users p ON p.user_id = c.patient_id
        WHERE c.doctor_id = ? OR (c.doctor_id IS NULL AND c.session_status = 'Pending')
-       ORDER BY FIELD(c.session_status, 'Active', 'Pending', 'Completed'), c.created_at`,
+       ORDER BY FIELD(c.session_status, 'Active', 'Pending', 'Completed'), FIELD(c.priority, 'Emergency', 'Urgent', 'Routine'), c.created_at`,
       [req.user.user_id]
     );
   } else {
-    // Nurse / Admin: active workload.
+    // Nurse / Admin: active workload, most urgent first.
     rows = await query(
-      `SELECT c.consultation_id, c.patient_id, p.name AS patient_name, c.doctor_id, d.name AS doctor_name, c.session_status, c.created_at
+      `SELECT c.consultation_id, c.patient_id, p.name AS patient_name, c.doctor_id, d.name AS doctor_name, c.session_status, c.priority, c.created_at
        FROM consultations c JOIN users p ON p.user_id = c.patient_id LEFT JOIN users d ON d.user_id = c.doctor_id
-       WHERE c.session_status IN ('Pending', 'Active') ORDER BY c.created_at`
+       WHERE c.session_status IN ('Pending', 'Active') ORDER BY FIELD(c.priority, 'Emergency', 'Urgent', 'Routine'), c.created_at`
     );
   }
   res.status(200).json(rows);
@@ -795,8 +801,16 @@ async function submitTriage(req, res) {
      VALUES (?, ?, ?, 'Waiting')`,
     [req.user.user_id, encryptJson(answers, config), priority]
   );
-  await writeAudit(req, { actorId: req.user.user_id, action: 'SUBMIT_TRIAGE', resourceType: 'TRIAGE', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { priority } });
-  res.status(201).json({ triageId: result.insertId, priority, status: 'Waiting' });
+  const triageId = result.insertId;
+  // One coherent journey: the triage immediately opens a Pending consultation linked to it,
+  // carrying the priority so the doctor pool is ordered by urgency.
+  const consultationId = `MH-C-${Date.now()}`;
+  await execute(
+    "INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status, triage_id, priority) VALUES (?, ?, NULL, 'Pending', ?, ?)",
+    [consultationId, req.user.user_id, triageId, priority]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'SUBMIT_TRIAGE', resourceType: 'TRIAGE', resourceId: String(triageId), outcome: 'SUCCESS', metadata: { priority, consultationId } });
+  res.status(201).json({ triageId, priority, status: 'Waiting', consultationId });
 }
 
 async function listQueue(req, res) {
@@ -1268,11 +1282,39 @@ async function issueRealtimeToken(req, res) {
 
 async function getRtcCredentials(req, res) {
   const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
-  // Only the assigned doctor/patient of the consultation may obtain TURN credentials.
+  // Only the assigned doctor/patient of the consultation may obtain ICE servers.
   await ensureConsultationAccess(req.user, consultationId);
-  const creds = makeTurnCredentials(config);
-  if (!creds) return res.status(503).json({ error: 'TURN/WebRTC is not configured.' });
-  res.status(200).json({ ...creds, consultationId });
+  // STUN is always returned (P2P needs no inbound server ports); TURN is added only if configured.
+  res.status(200).json({ iceServers: buildIceServers(config), consultationId });
+}
+
+// WebRTC signaling relay (same-origin, no third-party service). Each side posts its
+// SDP offer/answer + ICE candidates; the peer polls for the *other* side's signals.
+async function postSignal(req, res) {
+  const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
+  await ensureConsultationAccess(req.user, consultationId);
+  const kind = assertEnum(req.body.kind, 'kind', ['offer', 'answer', 'candidate']);
+  const payload = assertString(req.body.payload, 'payload', { min: 1, max: 50000 });
+  const result = await execute(
+    'INSERT INTO signaling_messages (consultation_id, sender_id, kind, payload) VALUES (?, ?, ?, ?)',
+    [consultationId, req.user.user_id, kind, payload]
+  );
+  res.status(201).json({ signalId: result.insertId });
+}
+
+async function getSignals(req, res) {
+  const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
+  await ensureConsultationAccess(req.user, consultationId);
+  const since = req.query.since ? assertPositiveInteger(req.query.since, 'since') : 0;
+  // Return only the peer's signals (never echo the caller's own).
+  const rows = await query(
+    `SELECT signal_id, sender_id, kind, payload, created_at
+     FROM signaling_messages
+     WHERE consultation_id = ? AND signal_id > ? AND sender_id <> ?
+     ORDER BY signal_id ASC`,
+    [consultationId, since, req.user.user_id]
+  );
+  res.status(200).json(rows);
 }
 
 async function startRecordingSession(req, res) {

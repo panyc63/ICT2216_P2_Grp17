@@ -5,6 +5,7 @@ DROP TRIGGER IF EXISTS prevent_security_audit_logs_update;
 DROP TRIGGER IF EXISTS prevent_security_audit_logs_delete;
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS signaling_messages;
 DROP TABLE IF EXISTS recording_sessions;
 DROP TABLE IF EXISTS message_attachments;
 DROP TABLE IF EXISTS chat_messages;
@@ -56,6 +57,11 @@ CREATE TABLE consultations (
     patient_id VARCHAR(36) NOT NULL,
     doctor_id VARCHAR(36) NULL,
     session_status ENUM('Pending', 'Active', 'Completed', 'Cancelled') NOT NULL,
+    -- Links the consultation to the triage that started it (logical link, set
+    -- server-side; not an FK to keep DROP ordering simple). priority mirrors the
+    -- triage score so the doctor pool can be ordered by urgency.
+    triage_id BIGINT NULL,
+    priority ENUM('Routine', 'Urgent', 'Emergency') NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP NULL DEFAULT NULL,
     FOREIGN KEY (patient_id) REFERENCES users(user_id) ON DELETE RESTRICT,
@@ -182,6 +188,22 @@ CREATE TABLE recording_sessions (
     ended_at TIMESTAMP NULL DEFAULT NULL,
     FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE RESTRICT,
     FOREIGN KEY (started_by) REFERENCES users(user_id) ON DELETE RESTRICT
+);
+
+-- Ephemeral WebRTC signaling relay (Phase 5): SDP offer/answer + ICE candidates passed
+-- between the two consultation participants over the same-origin API (no third-party
+-- signaling service). Object-level guarded by ensureConsultationAccess; rows are only
+-- needed during call setup.
+CREATE TABLE signaling_messages (
+    signal_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    consultation_id VARCHAR(36) NOT NULL,
+    sender_id VARCHAR(36) NOT NULL,
+    kind ENUM('offer', 'answer', 'candidate') NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE RESTRICT,
+    FOREIGN KEY (sender_id) REFERENCES users(user_id) ON DELETE RESTRICT,
+    INDEX idx_signaling_consultation (consultation_id, signal_id)
 );
 
 CREATE TABLE security_audit_logs (

@@ -51,9 +51,29 @@
         >
           Submit Questionnaire
         </button>
-        <p v-if="submitted" class="text-sm font-medium text-emerald-600">Your responses have been recorded.</p>
+        <p v-if="error" role="alert" class="text-sm font-medium text-red-600">{{ error }}</p>
       </div>
     </form>
+
+    <!-- Triage outcome: the rule engine's priority + the consultation it opened. -->
+    <div
+      v-if="result"
+      role="status"
+      class="mt-6 max-w-2xl rounded-xl border p-5"
+      :class="result.priority === 'Emergency' ? 'bg-red-50 border-red-200' : result.priority === 'Urgent' ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'"
+    >
+      <p
+        class="text-sm font-bold"
+        :class="result.priority === 'Emergency' ? 'text-red-700' : result.priority === 'Urgent' ? 'text-amber-700' : 'text-emerald-700'"
+      >
+        Triage priority: {{ result.priority }}
+      </p>
+      <p class="text-sm text-slate-600 mt-1">
+        A consultation (<span class="font-mono">{{ result.consultationId }}</span>) has been opened and placed in the queue.
+        A doctor will pick it up shortly — track its status and chat/video under
+        <router-link to="/patient/book-consultation" class="font-semibold text-indigo-600 hover:underline">My Consultations</router-link>.
+      </p>
+    </div>
 
     <div v-if="submitted" class="mt-6 max-w-2xl bg-slate-50 border border-slate-200 rounded-xl p-5">
       <h3 class="text-sm font-bold text-slate-700 mb-3">Your Responses</h3>
@@ -75,6 +95,7 @@ import { apiFetch } from '../../services/api'
 const questions = [
   { id: 'fever', label: 'Do you have a fever?', type: 'yesno' },
   { id: 'cough', label: 'Do you have a cough?', type: 'yesno' },
+  { id: 'shortnessOfBreath', label: 'Do you have shortness of breath?', type: 'yesno' },
   { id: 'chestPain', label: 'Are you experiencing chest pain?', type: 'scale' },
   { id: 'duration', label: 'How long have you had these symptoms?', type: 'text', placeholder: 'e.g. 3 days' }
 ]
@@ -83,19 +104,27 @@ const questions = [
 const answers = reactive({
   fever: patientStore.questionnaire.answers.fever || '',
   cough: patientStore.questionnaire.answers.cough || '',
+  shortnessOfBreath: patientStore.questionnaire.answers.shortnessOfBreath || '',
   chestPain: patientStore.questionnaire.answers.chestPain || '',
   duration: patientStore.questionnaire.answers.duration || ''
 })
 
 const submitted = ref(patientStore.questionnaire.submitted)
+const result = ref(null)
+const error = ref('')
 
 const submitAnswers = async () => {
-  await apiFetch('/triage', {
-    method: 'POST',
-    body: JSON.stringify({ ...answers })
-  })
-  patientStore.questionnaire.answers = { ...answers }
-  patientStore.questionnaire.submitted = true
-  submitted.value = true
+  error.value = ''
+  try {
+    result.value = await apiFetch('/triage', {
+      method: 'POST',
+      body: JSON.stringify({ ...answers })
+    })
+    patientStore.questionnaire.answers = { ...answers }
+    patientStore.questionnaire.submitted = true
+    submitted.value = true
+  } catch (err) {
+    error.value = err.message || 'Could not submit your questionnaire.'
+  }
 }
 </script>

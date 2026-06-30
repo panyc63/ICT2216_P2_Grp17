@@ -18,6 +18,7 @@ import {
   signJwt,
   signMcToken,
   signMcTokenAsym,
+  buildIceServers,
   generateMcKeyPair,
   decodeMcPayload,
   verifyMcTokenAsym,
@@ -191,6 +192,23 @@ test('security headers middleware sets hardening headers', () => {
   assert.equal(res.headers['cross-origin-resource-policy'], 'same-origin');
   // HSTS only in production config.
   assert.match(res.headers['strict-transport-security'], /max-age=\d+/);
+});
+
+// =========================================================================
+// WebRTC ICE servers
+// =========================================================================
+test('buildIceServers always returns STUN and adds managed TURN only when configured', () => {
+  const stunOnly = buildIceServers({ turnSecret: '', turnUrls: [], turnUsername: '', turnCredential: '' });
+  assert.equal(stunOnly.length, 1);
+  assert.match(String(stunOnly[0].urls), /^stun:/);
+
+  const withTurn = buildIceServers({
+    turnSecret: '', turnUrls: ['turn:turn.example.com:3478'], turnUsername: 'u', turnCredential: 'c',
+  });
+  assert.equal(withTurn.length, 2);
+  const turn = withTurn.find((s) => String(s.urls).includes('turn:'));
+  assert.equal(turn.username, 'u');
+  assert.equal(turn.credential, 'c');
 });
 
 // =========================================================================

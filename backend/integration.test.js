@@ -461,11 +461,60 @@ test('upload: a file containing the EICAR signature is blocked (422)', async () 
   assert.equal(res.status, 422);
 });
 
-test('realtime + WebRTC endpoints return 503 when integrations are unconfigured', async () => {
+test('realtime token is 503 (Firebase unconfigured) but WebRTC ICE works via STUN (no ports)', async () => {
   const session = mintSession(SEED_PATIENT);
   const csrf = await getCsrf();
   assert.equal((await api('/api/realtime/token', { method: 'POST', session, csrf })).status, 503);
-  assert.equal((await api('/api/consultations/MH-C001/rtc-credentials', { session })).status, 503);
+  // ICE no longer 503: public STUN is always returned so 1:1 P2P video needs no inbound ports.
+  const rtc = await api('/api/consultations/MH-C001/rtc-credentials', { session });
+  assert.equal(rtc.status, 200);
+  const body = await rtc.json();
+  assert.ok(Array.isArray(body.iceServers) && body.iceServers.length >= 1);
+  assert.ok(body.iceServers.some((s) => String(s.urls).startsWith('stun:')));
+});
+
+test('signaling relay: participants exchange offer/candidate; a third party is blocked (403)', async () => {
+  await db.execute(
+    `INSERT INTO users (user_id, name, email, password_hash, role, is_verified, status, token_version)
+     VALUES ('MH-SIGINT', 'Sig Intruder', 'sig-intruder@example.com', 'scrypt$16384$8$1$x$bm9o', 'Patient', TRUE, 'Active', 0)
+     ON DUPLICATE KEY UPDATE status='Active', token_version=0`
+  );
+  const patient = mintSession(SEED_PATIENT);
+  const doctor = mintSession(SEED_DOCTOR);
+  const intruder = mintSession({ user_id: 'MH-SIGINT', email: 'sig-intruder@example.com', role: 'Patient', token_version: 0 });
+  const csrf = await getCsrf();
+
+  const { consultationId } = await (await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} })).json();
+  await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action: 'claim' } });
+
+  // Doctor posts an offer; patient (peer) sees it; doctor does NOT see their own.
+  assert.equal((await api(`/api/consultations/${consultationId}/signal`, { method: 'POST', session: doctor, csrf, body: { kind: 'offer', payload: '{"type":"offer"}' } })).status, 201);
+  const peerView = await (await api(`/api/consultations/${consultationId}/signal`, { session: patient })).json();
+  assert.equal(peerView.some((s) => s.kind === 'offer'), true);
+  const selfView = await (await api(`/api/consultations/${consultationId}/signal`, { session: doctor })).json();
+  assert.equal(selfView.length, 0);
+
+  // A non-participant can neither read nor post signals.
+  assert.equal((await api(`/api/consultations/${consultationId}/signal`, { session: intruder })).status, 403);
+  assert.equal((await api(`/api/consultations/${consultationId}/signal`, { method: 'POST', session: intruder, csrf, body: { kind: 'candidate', payload: '{}' } })).status, 403);
+});
+
+test('triage opens a linked consultation and shortnessOfBreath drives Emergency priority', async () => {
+  const patient = mintSession(SEED_PATIENT);
+  const csrf = await getCsrf();
+  const res = await api('/api/triage', {
+    method: 'POST', session: patient, csrf,
+    body: { fever: 'No', cough: 'No', shortnessOfBreath: 'Yes', chestPain: 'None', duration: '2 days' },
+  });
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.equal(body.priority, 'Emergency');
+  assert.ok(body.consultationId);
+  // The triage created a real, linked Pending consultation carrying the priority.
+  const [rows] = await db.execute('SELECT session_status, priority, triage_id FROM consultations WHERE consultation_id = ?', [body.consultationId]);
+  assert.equal(rows[0].session_status, 'Pending');
+  assert.equal(rows[0].priority, 'Emergency');
+  assert.equal(String(rows[0].triage_id), String(body.triageId));
 });
 
 test('recording is doctor-gated and requires patient consent', async () => {

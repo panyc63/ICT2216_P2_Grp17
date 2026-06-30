@@ -31,42 +31,59 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+import { getCurrentSession, dashboardForRole } from '../services/api'
 
 const router = useRouter()
 const videoElement = ref(null)
 const streamActive = ref(false)
 const micVolume = ref(0)
 let mediaStream = null
+let audioContext = null
+let rafId = null
 
 const testHardwareDevices = async () => {
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-    
-    if (videoElement.value) {
-      videoElement.value.srcObject = mediaStream
-      streamActive.value = true
-      
-      simulateAudioInputLevel()
-    }
+    if (videoElement.value) videoElement.value.srcObject = mediaStream
+    streamActive.value = true
+    startMicMeter()
   } catch (error) {
-    console.error("Hardware access declined:", error)
-    alert("Could not access camera/microphone. Check browser permission blocks.")
+    console.error('Hardware access declined:', error)
+    alert('Could not access camera/microphone. Check browser permission blocks.')
   }
 }
 
-const simulateAudioInputLevel = () => {
-  if (!streamActive.value) return
-  setInterval(() => {
-    micVolume.value = Math.floor(Math.random() * 40) + 10 
-  }, 150)
+// Real microphone level via the Web Audio API (replaces the previous random simulation).
+const startMicMeter = () => {
+  audioContext = new (window.AudioContext || window.webkitAudioContext)()
+  const source = audioContext.createMediaStreamSource(mediaStream)
+  const analyser = audioContext.createAnalyser()
+  analyser.fftSize = 512
+  source.connect(analyser)
+  const data = new Uint8Array(analyser.frequencyBinCount)
+  const tick = () => {
+    analyser.getByteFrequencyData(data)
+    const avg = data.reduce((sum, v) => sum + v, 0) / data.length
+    micVolume.value = Math.min(100, Math.round((avg / 255) * 200))
+    rafId = requestAnimationFrame(tick)
+  }
+  tick()
 }
 
-const proceedToDashboard = () => {
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(track => track.stop())
-  }
-  router.push('/admin-dashboard')
+const cleanup = () => {
+  if (rafId) cancelAnimationFrame(rafId)
+  rafId = null
+  if (audioContext) { audioContext.close(); audioContext = null }
+  if (mediaStream) { mediaStream.getTracks().forEach((track) => track.stop()); mediaStream = null }
 }
+
+const proceedToDashboard = async () => {
+  cleanup()
+  const session = await getCurrentSession()
+  router.push(session?.user ? dashboardForRole(session.user.role) : '/login')
+}
+
+onBeforeUnmount(cleanup)
 </script>
