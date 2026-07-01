@@ -1,6 +1,6 @@
 <template>
-  <div class="min-h-screen bg-slate-50 flex font-sans">
-    <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col">
+  <div class="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
+    <aside class="w-full md:w-64 bg-slate-900 text-white p-6 flex flex-col">
       <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-8">MediFlow Admin Dashboard</div>
       <nav class="space-y-1 flex-1">
         <button @click="activeTab = 'staff'" :class="[activeTab === 'staff' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">Staff CRUD Management</button>
@@ -57,17 +57,18 @@
         <h1 class="text-2xl font-bold text-slate-900 mb-2">Live Ongoing Consultations</h1>
         <p class="text-sm text-slate-500 mb-6">Real-time telemetry tracking active patient consultation rooms.</p>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div v-for="room in consultations" :key="room.id" class="bg-white border border-slate-200 p-6 rounded-xl shadow-sm">
+          <div v-for="room in consultations" :key="room.consultation_id" class="bg-white border border-slate-200 p-6 rounded-xl shadow-sm">
             <div class="flex justify-between items-start mb-4">
               <div>
-                <h4 class="font-bold text-slate-900">Room Token: {{ room.id }}</h4>
-                <p class="text-xs text-slate-400">Signal Stream Latency: {{ room.latency }}ms</p>
+                <h4 class="font-bold text-slate-900">{{ room.consultation_id }}</h4>
+                <p class="text-xs text-slate-400">Priority: {{ room.priority || '—' }}</p>
               </div>
-              <span class="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 animate-pulse">Live</span>
+              <span :class="room.session_status === 'Active' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : 'bg-amber-50 text-amber-700 ring-amber-600/20'" class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset">{{ room.session_status }}</span>
             </div>
-            <p class="text-sm text-slate-600"><span class="font-semibold text-slate-700">Practitioner:</span> {{ room.doctor }}</p>
-            <p class="text-sm text-slate-600"><span class="font-semibold text-slate-700">Patient identity:</span> {{ room.patient }}</p>
+            <p class="text-sm text-slate-600"><span class="font-semibold text-slate-700">Practitioner:</span> {{ room.doctor_name || 'Unassigned' }}</p>
+            <p class="text-sm text-slate-600"><span class="font-semibold text-slate-700">Patient:</span> {{ room.patient_name }}</p>
           </div>
+          <div v-if="!consultations.length" class="text-slate-400 text-sm">No active consultations right now.</div>
         </div>
       </div>
 
@@ -75,16 +76,17 @@
         <h1 class="text-2xl font-bold text-slate-900 mb-2">Video Consultation Recording Logs</h1>
         <p class="text-sm text-slate-500 mb-6">Encrypted archival stores for institutional data auditing and liability retention rules.</p>
         <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden divide-y divide-slate-100">
-          <div v-for="video in recordings" :key="video.id" class="p-4 flex justify-between items-center hover:bg-slate-50">
+          <div v-for="rec in recordings" :key="rec.recording_id" class="p-4 flex justify-between items-center hover:bg-slate-50">
             <div class="flex items-center gap-3">
               <div class="text-xl">📹</div>
               <div>
-                <p class="text-sm font-semibold text-slate-900">{{ video.fileName }}</p>
-                <p class="text-xs text-slate-400">Timestamp: {{ video.date }} | Storage Size: {{ video.size }}</p>
+                <p class="text-sm font-semibold text-slate-900">Consultation {{ rec.consultation_id }} — {{ rec.patient_name || '—' }}</p>
+                <p class="text-xs text-slate-400">Started: {{ formatTs(rec.started_at) }} · Consent: {{ rec.patient_consent ? 'Yes' : 'No' }} · By: {{ rec.started_by_name || '—' }}</p>
               </div>
             </div>
-            <button class="text-xs font-semibold bg-slate-100 text-slate-700 px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-200">Review File</button>
+            <span class="text-xs font-semibold bg-slate-100 text-slate-600 px-3 py-1.5 rounded border border-slate-300">Metadata only (no media stored)</span>
           </div>
+          <div v-if="!recordings.length" class="p-10 text-center text-slate-400 text-sm">No recording sessions logged.</div>
         </div>
       </div>
     </main>
@@ -147,17 +149,12 @@ const fetchStaffMembers = async () => {
   }
 }
 
-onMounted(() => {
-  fetchStaffMembers()
-  
-  consultations.value = [
-    { id: 'ROOM-77X', doctor: 'Dr. Smith', patient: 'John Doe', latency: 12 },
-    { id: 'ROOM-42B', doctor: 'Dr. Smith', patient: 'Jane Smith', latency: 18 }
-  ]
-  recordings.value = [
-    { id: 101, fileName: 'REC_CONSULT_ROOM-11A_20260614.mp4', date: '2026-06-14 09:22', size: '142.4 MB' },
-    { id: 102, fileName: 'REC_CONSULT_ROOM-04F_20260615.mp4', date: '2026-06-15 14:45', size: '98.1 MB' }
-  ]
+const formatTs = (t) => { try { return new Date(t).toLocaleString() } catch { return '—' } }
+
+onMounted(async () => {
+  await fetchStaffMembers()
+  try { consultations.value = await apiFetch('/consultations') } catch { consultations.value = [] }
+  try { recordings.value = await apiFetch('/recordings') } catch { recordings.value = [] }
 })
 
 // Trigger endpoint registration logic

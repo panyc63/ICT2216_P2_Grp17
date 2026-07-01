@@ -7,9 +7,9 @@
         </div>
         <ul class="hidden md:flex gap-8 list-none font-medium text-sm text-slate-600">
           <li><router-link to="/" class="hover:text-indigo-600 transition-colors">Home</router-link></li>
-          <li><a href="#" class="hover:text-indigo-600 transition-colors">About Us</a></li>
-          <li><a href="#" class="hover:text-indigo-600 transition-colors">Services</a></li>
-          <li><a href="#" class="hover:text-indigo-600 transition-colors">Contact Us</a></li>
+          <li><router-link to="/about" class="hover:text-indigo-600 transition-colors">About Us</router-link></li>
+          <li><router-link to="/services" class="hover:text-indigo-600 transition-colors">Services</router-link></li>
+          <li><router-link to="/contact" class="hover:text-indigo-600 transition-colors">Contact Us</router-link></li>
         </ul>
         <router-link to="/login" class="bg-slate-900 text-white px-6 py-2.5 rounded-lg text-sm font-semibold hover:bg-indigo-600 transition-all shadow-sm">
           Get Started

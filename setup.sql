@@ -122,6 +122,10 @@ CREATE TABLE prescriptions (
     refills INT NOT NULL DEFAULT 0,
     instructions_encrypted TEXT NULL,
     status ENUM('Issued', 'Fulfilled', 'Cancelled') NOT NULL DEFAULT 'Issued',
+    -- How the patient elected to receive the medication, and (for delivery) when
+    -- they confirmed receipt. Drives the Track Delivery progress steps.
+    collection_method ENUM('SelfCollect', 'Delivery') NOT NULL DEFAULT 'SelfCollect',
+    delivered_at TIMESTAMP NULL DEFAULT NULL,
     fulfilled_by VARCHAR(36) NULL,
     fulfilled_at TIMESTAMP NULL DEFAULT NULL,
     issued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

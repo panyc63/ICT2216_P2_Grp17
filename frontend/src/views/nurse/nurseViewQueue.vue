@@ -1,9 +1,9 @@
 <template>
-  <div class="min-h-screen bg-slate-50 flex font-sans">
-    <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col">
+  <div class="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
+    <aside class="w-full md:w-64 bg-slate-900 text-white p-6 flex flex-col">
       <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-2">MediFlow Nurse</div>
       <div class="mb-8 border-b border-slate-800 pb-4">
-        <p class="text-sm font-bold text-white">Nurse Clara Oswald</p>
+        <p class="text-sm font-bold text-white">{{ nurseName }}</p>
       </div>
       <nav class="space-y-1 flex-1">
         <button @click="router.push({ name: 'NurseDashboard' })" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors text-slate-300 hover:bg-slate-800 flex items-center gap-2">🏠 Dashboard Home</button>
@@ -20,6 +20,8 @@
         </div>
         <span class="bg-emerald-50 text-emerald-700 text-xs px-3 py-1 rounded-full font-semibold animate-pulse border border-emerald-200">System Dynamic Feed Active</span>
       </div>
+
+      <p v-if="error" role="alert" class="mb-4 text-sm font-medium text-red-600">{{ error }}</p>
 
       <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <table class="min-w-full divide-y divide-slate-200 text-left text-sm">
@@ -69,15 +71,22 @@ const router = useRouter()
 
 // Queue Pipeline
 const patientQueue = ref([])
+const nurseName = ref('Nurse')
+const error = ref('')
 
 onMounted(async () => {
-  const data = await apiFetch('/nurse/queue')
-  patientQueue.value = data.map((item) => ({
-    id: item.triage_id,
-    patientName: item.patient_name,
-    assignedDoctor: item.assigned_doctor_id || 'Unassigned',
-    priority: item.priority_score,
-    status: item.status
-  }))
+  try { const me = await apiFetch('/me'); nurseName.value = me.user?.name || 'Nurse' } catch { /* not signed in */ }
+  try {
+    const data = await apiFetch('/nurse/queue')
+    patientQueue.value = data.map((item) => ({
+      id: item.triage_id,
+      patientName: item.patient_name,
+      assignedDoctor: item.assigned_doctor_id || 'Unassigned',
+      priority: item.priority_score,
+      status: item.status
+    }))
+  } catch (err) {
+    error.value = err.message || 'Could not load the queue.'
+  }
 })
 </script>

@@ -20,7 +20,8 @@ push / pull_request → ┌─ CI (lint, unit tests, build, npm audit, SBOM)
                       ├─ Semgrep SAST (+custom)  ├─→ SARIF → Security tab
                       ├─ Dependency Review       │
                       ├─ Gitleaks (secrets)      │
-                      ├─ Trivy + hadolint        ─┘
+                      ├─ Trivy + hadolint        │
+                      ├─ ShellCheck (shell lint) ─┘
                       ├─ DAST (OWASP ZAP)        [scheduled / PR, informational]
                       └─ OpenSSF Scorecard       [scheduled]
 ```
@@ -30,7 +31,9 @@ push / pull_request → ┌─ CI (lint, unit tests, build, npm audit, SBOM)
 | Stage | Tool | Workflow | Trigger | Purpose | Output |
 |-------|------|----------|---------|---------|--------|
 | Lint | ESLint + `eslint-plugin-security`, `eslint-plugin-vue` | `ci.yml` | push/PR | Code quality + insecure-pattern lint | Job log |
-| Unit tests | Node `node:test` | `ci.yml` | push/PR | Crypto/JWT/CSRF/validation/rate-limit units | Job log |
+| Shell lint | ShellCheck | `shellcheck.yml` | push/PR (shell paths) + weekly | Lint deploy shell scripts (warnings fail) | Job log |
+| Unit tests (backend) | Node `node:test` | `ci.yml` | push/PR | Crypto/JWT/CSRF/validation/rate-limit units | Job log |
+| Unit tests (frontend) | Node `node:test` | `ci.yml` | push/PR | Pure view logic (delivery tracking, role routing) | Job log |
 | Build | Vite | `ci.yml` | push/PR | Frontend builds cleanly | Job log |
 | SCA | `npm audit` (`audit:prod`) | `ci.yml` | push/PR | Fail on high-severity deps | Job log |
 | SBOM | CycloneDX | `ci.yml` | push/PR | Software bill of materials | Artifact `sbom` |
@@ -63,23 +66,48 @@ A **CycloneDX SBOM** is produced each run (`ci.yml` → artifact `sbom`) for inv
 
 ## 4. Automated-testing evidence (Report II)
 
-- **Unit tests** — `backend/security.test.js` (`npm test` → `node --test`). Cover password
-  hashing, JWT tamper/expiry, AES-GCM round-trip + tamper detection, MC-token signing,
-  input validation (incl. SQLi/XSS payloads), security headers, CSRF accept/reject,
-  rate-limit 429, and audit-metadata redaction.
-- **Integration tests** — `backend/integration.test.js` run by `integration-test.yml`
-  against a booted API + seeded MySQL. Cover unauthenticated 401, wrong-role 403,
-  object-level (cross-patient) 403, login rate-limit 429, Stripe webhook signature
-  rejection, audit-row creation, append-only audit immutability, and minimal-PHI QR
-  responses.
+- **Backend unit tests** — `backend/security.test.js` (`npm test` → `node --test`, **27 tests**).
+  Cover password hashing, JWT tamper/expiry, AES-GCM round-trip + tamper detection, MC-token
+  signing (symmetric + Ed25519), input validation (incl. SQLi/XSS payloads and the optional/
+  bounded validators), `safeEqual` timing-safe compare, security headers, CSRF accept/reject,
+  rate-limit 429, TURN credential derivation, and audit-metadata redaction.
+- **Backend integration tests** — `backend/integration.test.js` run by `integration-test.yml`
+  against a booted API + seeded MySQL (**36 tests**). Cover unauthenticated 401, wrong-role 403,
+  object-level (cross-patient **and** unlinked-doctor) 403, login rate-limit 429, Stripe webhook
+  signature rejection, audit-row creation, append-only audit immutability, minimal-PHI QR
+  responses, the consultation lifecycle, pharmacy fulfilment/oversell, secure upload + EICAR
+  block, WebRTC signalling authz, **staff-directory/recordings/doctor-Rx RBAC**, the
+  **Nurse-cannot-drive-clinical-state** fix, **triage↔consultation status sync**, and the
+  **medication delivery gating + receipt** flow.
+- **Frontend unit tests** — `frontend/test/*.test.js` (`npm test` → `node --test`, **10 tests**),
+  covering the pure view logic extracted to `src/utils/` (delivery-tracking stage/label rules,
+  delivery-address gating, and role→dashboard routing). No browser or extra dependencies.
 
 Run locally:
 ```bash
-cd backend && npm test            # unit
+cd backend  && npm test            # backend unit  (27)
+cd frontend && npm test            # frontend unit (10)
 # integration (needs a MySQL with setup.sql loaded + the server running):
 #   see integration-test.yml for the exact env; then:
-node --test integration.test.js
+cd backend && node --test integration.test.js   # (36)
 ```
+
+## 4a. Coverage of common secure-pipeline tools
+
+For reference, MediFlow's pipeline against a typical peer DevSecOps stack:
+
+| Capability | Peer stack | MediFlow |
+|-----------|-----------|----------|
+| Custom test suite | Large custom suite | **73 tests** (27 backend unit + 36 integration + 10 frontend) via `node:test` |
+| Dependency audit | `pip-audit` | `npm audit` (`audit:prod` + frontend high-severity) + Dependency Review + Dependabot + SBOM |
+| SAST | SonarQube | CodeQL (`security-extended`) + Semgrep (OWASP/security-audit/js + custom rules) |
+| Secret scanning | Gitleaks + custom | Gitleaks (full history) + GitHub secret-scanning (push protection) |
+| Shell lint | ShellCheck | **ShellCheck** (`shellcheck.yml`, warnings fail) |
+| Dockerfile lint | Hadolint | Hadolint (in `container-scan.yml`) |
+| Additional (beyond peer) | — | Trivy (image/IaC), OWASP ZAP DAST, OpenSSF Scorecard, CycloneDX SBOM |
+
+SonarQube/SonarCloud is the one peer tool not wired here; CodeQL + Semgrep provide equivalent
+SAST coverage, and SonarCloud can be added later for literal parity if desired.
 
 ## 5. Running the stack locally
 

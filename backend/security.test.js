@@ -4,17 +4,26 @@ import {
   applySecurityHeaders,
   assertEmail,
   assertEnum,
+  assertOptionalString,
+  assertPassword,
   assertPositiveInteger,
   assertString,
   auditMetadata,
   csrfGuard,
   decryptText,
+  decryptJson,
   encryptText,
+  encryptJson,
   hashPassword,
   hashToken,
   issueCsrfToken,
+  makeTurnCredentials,
   rateLimit,
+  randomToken,
+  safeEqual,
   scanAttachmentMetadata,
+  sessionPayload,
+  sha256,
   signJwt,
   signMcToken,
   signMcTokenAsym,
@@ -273,4 +282,96 @@ test('audit metadata redacts secrets and hashes email', () => {
   assert.equal(redacted.diagnosis, '[REDACTED]');
   assert.match(redacted.email, /^sha256:/);
   assert.equal(redacted.email.includes('patient@example.com'), false);
+});
+
+// =========================================================================
+// Timing-safe comparison (used for Stripe webhook + CSRF + reset tokens)
+// =========================================================================
+test('safeEqual is true only for identical values and never throws on length mismatch', () => {
+  assert.equal(safeEqual('abc123', 'abc123'), true);
+  assert.equal(safeEqual('abc123', 'abc124'), false);
+  // Different lengths must return false rather than throwing (timingSafeEqual would throw).
+  assert.equal(safeEqual('short', 'a-much-longer-value'), false);
+  assert.equal(safeEqual('', ''), true);
+});
+
+// =========================================================================
+// Additional input-validation edge cases
+// =========================================================================
+test('assertPassword enforces the minimum length policy', () => {
+  assert.throws(() => assertPassword('short'), /password/);
+  assert.equal(assertPassword('LongEnough1!'), 'LongEnough1!');
+});
+
+test('assertOptionalString maps empty/undefined to null but validates when present', () => {
+  assert.equal(assertOptionalString(undefined, 'phone', { min: 3, max: 30 }), null);
+  assert.equal(assertOptionalString('', 'phone', { min: 3, max: 30 }), null);
+  assert.throws(() => assertOptionalString('12', 'phone', { min: 3, max: 30 }));
+  assert.equal(assertOptionalString(' +65 91234567 ', 'phone', { min: 3, max: 30 }), '+65 91234567');
+});
+
+test('assertPositiveInteger enforces an upper bound and rejects non-positive values', () => {
+  assert.equal(assertPositiveInteger('42', 'id'), 42);
+  assert.throws(() => assertPositiveInteger('0', 'id'));
+  assert.throws(() => assertPositiveInteger('-5', 'id'));
+  assert.throws(() => assertPositiveInteger('9999', 'id', { max: 100 }));
+});
+
+test('assertString enforces a supplied character pattern', () => {
+  const ok = assertString('MH-C-123', 'consultationId', { pattern: /^[\w-]+$/ });
+  assert.equal(ok, 'MH-C-123');
+  assert.throws(() => assertString('drop; table', 'consultationId', { pattern: /^[\w-]+$/ }));
+});
+
+test('assertEnum accepts only members of the allowed set', () => {
+  assert.equal(assertEnum('Delivery', 'method', ['SelfCollect', 'Delivery']), 'Delivery');
+  assert.throws(() => assertEnum('Teleport', 'method', ['SelfCollect', 'Delivery']));
+});
+
+// =========================================================================
+// JSON field encryption (PHI at rest)
+// =========================================================================
+test('encryptJson/decryptJson round-trips structured PHI and is not plaintext', () => {
+  const answers = { chestPain: 'Severe', fever: 'Yes', note: 'radiating to left arm' };
+  const ciphertext = encryptJson(answers, config);
+  assert.equal(ciphertext.startsWith('v1:'), true);
+  assert.equal(ciphertext.includes('Severe'), false);
+  assert.deepEqual(decryptJson(ciphertext, config), answers);
+});
+
+// =========================================================================
+// Token/hash primitives
+// =========================================================================
+test('sha256 is deterministic hex and randomToken is unique base64url', () => {
+  assert.equal(sha256('abc'), sha256('abc'));
+  assert.match(sha256('abc'), /^[a-f0-9]{64}$/);
+  const a = randomToken(32);
+  const b = randomToken(32);
+  assert.notEqual(a, b);
+  assert.match(a, /^[A-Za-z0-9_-]+$/);
+});
+
+// =========================================================================
+// Session payload shape (JWT claims)
+// =========================================================================
+test('sessionPayload carries the identity/role claims and honours overrides', () => {
+  const payload = sessionPayload({ user_id: 'MH-U006', email: 'john@gmail.com', role: 'Patient', token_version: 3 });
+  assert.equal(payload.sub, 'MH-U006');
+  assert.equal(payload.role, 'Patient');
+  assert.equal(payload.token_version, 3);
+  const reauth = sessionPayload({ user_id: 'MH-U006', email: 'john@gmail.com', role: 'Patient', token_version: 3 }, { reauth_at: 1234 });
+  assert.equal(reauth.reauth_at, 1234);
+});
+
+// =========================================================================
+// TURN credential derivation (managed/self-hosted relay)
+// =========================================================================
+test('makeTurnCredentials returns null without config and HMAC creds when a secret is set', () => {
+  assert.equal(makeTurnCredentials({ turnSecret: '', turnUrls: [] }), null);
+  const creds = makeTurnCredentials({ turnSecret: 'shared-turn-secret', turnUrls: ['turn:t.example.com:3478'] }, 600);
+  assert.ok(creds);
+  assert.equal(typeof creds.username, 'string');
+  assert.equal(typeof creds.credential, 'string');
+  assert.equal(creds.ttl, 600);
+  assert.deepEqual(creds.urls, ['turn:t.example.com:3478']);
 });

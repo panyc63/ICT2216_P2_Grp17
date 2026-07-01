@@ -27,6 +27,10 @@
           <button type="submit" class="w-full bg-slate-950 text-white font-bold py-3 rounded-xl hover:bg-slate-800 transition-all shadow-sm">
             Contact Us!
           </button>
+
+          <p v-if="notice" role="status" aria-live="polite" class="text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
+            {{ notice }}
+          </p>
         </form>
       </div>
 
@@ -62,9 +66,12 @@
 import { ref } from 'vue'
 
 const form = ref({ name: '', email: '', message: '' })
+const notice = ref('')
 
+// This clinic prototype has no ticketing backend; the form gives an honest
+// acknowledgement and points the user at the monitored support inbox.
 const submitContactForm = () => {
-  alert(`Thank you, ${form.value.name}! Your informational request has been processed locally.`)
+  notice.value = `Thanks, ${form.value.name}. For a guaranteed response please also email enquiries@mediflow.com — we'll get back to you within one business day.`
   form.value = { name: '', email: '', message: '' }
 }
 </script>

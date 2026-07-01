@@ -1,3 +1,7 @@
+import { dashboardForRole } from '../utils/roles.js';
+
+export { dashboardForRole };
+
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 let sessionCache = null;
@@ -80,15 +84,6 @@ export async function getCurrentSession({ force = false } = {}) {
     clearSession();
     return null;
   }
-}
-
-export function dashboardForRole(role) {
-  const normalized = String(role || '').toLowerCase();
-  if (normalized === 'admin') return '/admin-dashboard';
-  if (normalized === 'doctor') return '/doc-dashboard';
-  if (normalized === 'nurse') return '/nurse-dashboard';
-  if (normalized === 'pharmacist') return '/pharmacist-dashboard';
-  return '/patient';
 }
 
 export async function logout(router) {

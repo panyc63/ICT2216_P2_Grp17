@@ -4,8 +4,11 @@
     <div class="bg-white border-b border-slate-200 sticky top-0 z-40">
       <div class="max-w-5xl mx-auto px-4 sm:px-6">
         <div class="flex items-center justify-between py-3">
-          <div class="text-lg font-extrabold tracking-tight text-indigo-600">MediFlow</div>
-          <div class="text-sm text-slate-500">Patient Portal</div>
+          <router-link to="/" class="text-lg font-extrabold tracking-tight text-indigo-600">MediFlow</router-link>
+          <div class="flex items-center gap-4">
+            <span class="text-sm text-slate-500 hidden sm:inline">Patient Portal</span>
+            <button @click="handleLogout" class="text-sm font-semibold text-red-600 hover:text-red-700">Logout</button>
+          </div>
         </div>
         <nav class="flex gap-1 overflow-x-auto pb-2 -mb-px">
           <router-link
@@ -29,6 +32,12 @@
 </template>
 
 <script setup>
+import { useRouter } from 'vue-router'
+import { logout } from '../../services/api'
+
+const router = useRouter()
+const handleLogout = () => logout(router)
+
 const navLinks = [
   { to: '/patient/profile', label: 'Profile' },
   { to: '/patient/book-consultation', label: 'Book Consultation' },

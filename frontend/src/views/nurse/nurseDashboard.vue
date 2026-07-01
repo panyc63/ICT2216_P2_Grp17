@@ -1,6 +1,6 @@
 <template>
-  <div class="min-h-screen bg-slate-50 flex font-sans">
-    <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col">
+  <div class="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
+    <aside class="w-full md:w-64 bg-slate-900 text-white p-6 flex flex-col">
       <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-2">MediFlow Nurse</div>
       <div class="mb-8 border-b border-slate-800 pb-4">
         <p class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Active Station</p>
