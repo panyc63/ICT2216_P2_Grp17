@@ -86,6 +86,8 @@ const onConnectTrouble = () => {
   error.value = hasTurn
     ? 'Couldn’t connect to the other party. Please check both sides’ network/firewall and try again.'
     : 'Couldn’t establish a direct connection — this network needs a TURN relay, which the clinic must configure before video calls work across networks.'
+  // Stop polling a call that will not connect so it can't run up the signalling rate limit.
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
 const flushCandidates = async () => {

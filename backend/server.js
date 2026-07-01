@@ -94,7 +94,10 @@ const chatLimit = rateLimit({ windowMs: 60 * 1000, max: 30, keyPrefix: 'chat' })
 const paymentLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'payment' });
 const verificationLimit = rateLimit({ windowMs: 60 * 1000, max: 20, keyPrefix: 'mc-verify' });
 // Signaling is polled during call setup (offer/answer/ICE), so it needs more headroom than chat.
-const signalLimit = rateLimit({ windowMs: 60 * 1000, max: 120, keyPrefix: 'signal' });
+// Signalling polls every ~1.5s per participant plus ICE candidate posts, so the budget is
+// generous — and the limiter runs AFTER authenticate below, so it is keyed per-user (not per
+// shared/CGNAT IP, which broke calls from mobile networks).
+const signalLimit = rateLimit({ windowMs: 60 * 1000, max: 240, keyPrefix: 'signal' });
 
 // In-memory upload (max 5 MB) so the buffer can be malware-scanned before it ever touches disk.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -176,11 +179,11 @@ app.get('/api/patient/medical-certificates/latest', asyncHandler(authenticate), 
 app.post('/api/medical-certificates/:id/revoke', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), requireRecentReauth, asyncHandler(revokeMedicalCertificate));
 app.get('/api/verify/mc/:token', verificationLimit, asyncHandler(verifyMedicalCertificate));
 
-app.get('/api/consultations/:id/messages', chatLimit, asyncHandler(authenticate), asyncHandler(listMessages));
-app.post('/api/consultations/:id/messages', chatLimit, asyncHandler(authenticate), asyncHandler(createMessage));
-app.post('/api/consultations/:id/attachments', chatLimit, asyncHandler(authenticate), asyncHandler(registerAttachment));
+app.get('/api/consultations/:id/messages', asyncHandler(authenticate), chatLimit, asyncHandler(listMessages));
+app.post('/api/consultations/:id/messages', asyncHandler(authenticate), chatLimit, asyncHandler(createMessage));
+app.post('/api/consultations/:id/attachments', asyncHandler(authenticate), chatLimit, asyncHandler(registerAttachment));
 // Secure file upload: malware-scanned (ClamAV, or EICAR stub when not configured) before storage.
-app.post('/api/consultations/:id/attachments/upload', chatLimit, asyncHandler(authenticate), upload.single('file'), asyncHandler(uploadAttachment));
+app.post('/api/consultations/:id/attachments/upload', asyncHandler(authenticate), chatLimit, upload.single('file'), asyncHandler(uploadAttachment));
 app.get('/api/attachments/:id', asyncHandler(authenticate), asyncHandler(downloadAttachment));
 
 // Realtime (Phase 4): mint a Firebase custom token (role-claimed) for chat/queue/signaling.
@@ -188,8 +191,8 @@ app.post('/api/realtime/token', asyncHandler(authenticate), asyncHandler(issueRe
 // WebRTC (Phase 5): ICE servers (STUN + optional TURN), same-origin signaling relay,
 // and consent-gated recording metadata.
 app.get('/api/consultations/:id/rtc-credentials', asyncHandler(authenticate), asyncHandler(getRtcCredentials));
-app.post('/api/consultations/:id/signal', signalLimit, asyncHandler(authenticate), asyncHandler(postSignal));
-app.get('/api/consultations/:id/signal', signalLimit, asyncHandler(authenticate), asyncHandler(getSignals));
+app.post('/api/consultations/:id/signal', asyncHandler(authenticate), signalLimit, asyncHandler(postSignal));
+app.get('/api/consultations/:id/signal', asyncHandler(authenticate), signalLimit, asyncHandler(getSignals));
 app.post('/api/consultations/:id/recording', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), asyncHandler(startRecordingSession));
 
 app.use((err, req, res, _next) => {
