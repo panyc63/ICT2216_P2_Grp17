@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@2.0.0
         env:
           # Treat warnings as failures so shell issues can't merge silently.
           SHELLCHECK_OPTS: -S warning
