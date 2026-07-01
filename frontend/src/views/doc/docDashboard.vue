@@ -1,12 +1,11 @@
 <template>
-  <div class="min-h-screen bg-slate-50 flex font-sans">
-    <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col">
+  <div class="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
+    <aside class="w-full md:w-64 bg-slate-900 text-white p-6 flex flex-col">
       <div class="text-xl font-extrabold tracking-tight text-indigo-400 mb-2">MediFlow Hub</div>
       
       <div class="mb-8 border-b border-slate-800 pb-4">
         <p class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Practitioner Portal</p>
         <p class="text-sm font-bold text-white mt-1">{{ currentDoctor.name }}</p>
-        <p class="text-xs text-slate-400 italic mt-0.5">{{ currentDoctor.specialty }}</p>
       </div>
 
       <nav class="space-y-1 flex-1">
@@ -103,7 +102,7 @@ import { apiFetch, logout } from '../../services/api'
 const router = useRouter()
 const route = useRoute()
 
-const currentDoctor = ref({ name: 'Doctor', specialty: 'Practitioner Portal' })
+const currentDoctor = ref({ name: 'Doctor' })
 const meId = ref('')
 const consultations = ref([])
 
@@ -111,7 +110,7 @@ const loadMe = async () => {
   try {
     const me = await apiFetch('/me')
     meId.value = me.user?.user_id || ''
-    currentDoctor.value = { name: me.user?.name || 'Doctor', specialty: me.user?.role || 'Doctor' }
+    currentDoctor.value = { name: me.user?.name || 'Doctor' }
   } catch { /* not signed in */ }
 }
 

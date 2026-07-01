@@ -5,7 +5,11 @@
       <p class="text-sm text-slate-500">View and download your medical certificate as a PDF.</p>
     </div>
 
-    <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-8 max-w-2xl">
+    <div v-if="!mc" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-10 text-center text-slate-400 max-w-2xl">
+      No medical certificate has been issued to you yet.
+    </div>
+
+    <div v-else class="bg-white border border-slate-200 rounded-2xl shadow-sm p-8 max-w-2xl">
       <div class="text-center border-b border-slate-200 pb-4 mb-6">
         <p class="text-lg font-extrabold tracking-tight text-indigo-600">MediFlow Clinic</p>
         <p class="text-xs text-slate-400">Medical Certificate</p>
@@ -53,32 +57,27 @@ import { onMounted, ref } from 'vue'
 import { jsPDF } from 'jspdf'
 import { apiFetch } from '../../services/api'
 
-const mc = ref({
-  patientName: 'Tan Wei Ming',
-  diagnosis: 'Acute Upper Respiratory Tract Infection',
-  issueDate: '18 Jun 2026',
-  validFrom: '18 Jun 2026',
-  validTo: '20 Jun 2026',
-  doctor: 'Dr. John Doe'
-})
+// Null until the backend confirms an issued certificate — no sample/seed data.
+const mc = ref(null)
 
 onMounted(async () => {
   try {
     const data = await apiFetch('/patient/medical-certificates/latest')
     mc.value = {
-      patientName: data.patient_id,
-      diagnosis: data.diagnosis || 'Diagnosis available in protected clinical record',
-      issueDate: String(data.issue_date).slice(0, 10),
-      validFrom: String(data.issue_date).slice(0, 10),
-      validTo: String(data.valid_until).slice(0, 10),
-      doctor: data.doctor_id
+      patientName: data.patient_name || 'You',
+      diagnosis: data.diagnosis || 'Recorded in your clinical record',
+      issueDate: String(data.issue_date || '').slice(0, 10),
+      validFrom: String(data.issue_date || '').slice(0, 10),
+      validTo: String(data.valid_until || '').slice(0, 10),
+      doctor: data.doctor_name || 'Attending doctor',
     }
   } catch {
-    // Keep the sample visible if no certificate has been issued yet.
+    mc.value = null // no certificate yet → empty state
   }
 })
 
 const downloadPdf = () => {
+  if (!mc.value) return
   const doc = new jsPDF()
   const data = mc.value
 
@@ -97,7 +96,7 @@ const downloadPdf = () => {
     ['Date of Issue', data.issueDate],
     ['Valid From', data.validFrom],
     ['Valid To', data.validTo],
-    ['Attending Doctor', data.doctor]
+    ['Attending Doctor', data.doctor],
   ]
   rows.forEach(([label, value]) => {
     doc.setFont(undefined, 'bold')
@@ -109,16 +108,11 @@ const downloadPdf = () => {
 
   y += 10
   doc.setFontSize(10)
-  doc.text(
-    'This is to certify that the above-named patient is unfit for work/school',
-    20,
-    y
-  )
+  doc.text('This is to certify that the above-named patient is unfit for work/school', 20, y)
   doc.text('for the validity period stated above.', 20, y + 6)
-
   doc.text('_____________________', 20, y + 30)
-  doc.text(data.doctor, 20, y + 36)
+  doc.text(String(data.doctor), 20, y + 36)
 
-  doc.save(`Medical_Certificate_${data.patientName.replace(/\s+/g, '_')}.pdf`)
+  doc.save(`Medical_Certificate_${String(data.patientName).replace(/\s+/g, '_')}.pdf`)
 }
 </script>

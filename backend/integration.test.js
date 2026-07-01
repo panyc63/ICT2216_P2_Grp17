@@ -526,3 +526,130 @@ test('recording is doctor-gated and requires patient consent', async () => {
   assert.equal((await api('/api/consultations/MH-C001/recording', { method: 'POST', session: doctor, csrf, body: { consent: false } })).status, 400);
   assert.equal((await api('/api/consultations/MH-C001/recording', { method: 'POST', session: doctor, csrf, body: { consent: true } })).status, 201);
 });
+
+// --- New endpoints: staff directory / recordings / doctor Rx history -------
+test('staff directory /api/doctors is staff-only (Nurse allowed, Patient rejected)', async () => {
+  const nurse = mintSession({ user_id: 'MH-U003', email: 'nurse@mediflow.com', role: 'Nurse', token_version: 0 });
+  const list = await api('/api/doctors', { session: nurse });
+  assert.equal(list.status, 200);
+  const doctors = await list.json();
+  assert.equal(Array.isArray(doctors), true);
+  assert.equal(doctors.some((d) => d.user_id === SEED_DOCTOR.user_id), true);
+  // Only Active doctors, and no credential columns leak.
+  assert.equal('password_hash' in (doctors[0] || {}), false);
+  // A patient has no business enumerating staff.
+  assert.equal((await api('/api/doctors', { session: mintSession(SEED_PATIENT) })).status, 403);
+});
+
+test('recordings archive /api/recordings is Admin-only', async () => {
+  assert.equal((await api('/api/recordings', { session: mintSession(SEED_ADMIN) })).status, 200);
+  assert.equal((await api('/api/recordings', { session: mintSession(SEED_DOCTOR) })).status, 403);
+  assert.equal((await api('/api/recordings', { session: mintSession(SEED_PATIENT) })).status, 403);
+});
+
+test('doctor prescription history /api/doctor/prescriptions is Doctor-only and scoped to the doctor', async () => {
+  const res = await api('/api/doctor/prescriptions', { session: mintSession(SEED_DOCTOR) });
+  assert.equal(res.status, 200);
+  const rows = await res.json();
+  assert.equal(Array.isArray(rows), true);
+  // Every row belongs to this doctor (server scopes by doctor_id = req.user).
+  assert.equal(rows.every((r) => r.patient_name !== undefined), true);
+  assert.equal((await api('/api/doctor/prescriptions', { session: mintSession(SEED_PATIENT) })).status, 403);
+});
+
+// --- Security fix: a Nurse cannot drive clinical (start/complete) state -----
+test('a Nurse cannot start or complete a consultation but may assign one (least privilege)', async () => {
+  const nurse = mintSession({ user_id: 'MH-U003', email: 'nurse@mediflow.com', role: 'Nurse', token_version: 0 });
+  const patient = mintSession(SEED_PATIENT);
+  const csrf = await getCsrf();
+  const { consultationId } = await (await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} })).json();
+
+  assert.equal((await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: nurse, csrf, body: { action: 'start' } })).status, 403);
+  assert.equal((await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: nurse, csrf, body: { action: 'complete' } })).status, 403);
+  // Assignment is a legitimate nurse action.
+  assert.equal((await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: nurse, csrf, body: { action: 'assign', doctorId: SEED_DOCTOR.user_id } })).status, 200);
+});
+
+// --- Security fix: payment object-level authz includes the assigned doctor --
+test('payment: the assigned doctor may read a patient payment; an unlinked doctor may not', async () => {
+  assert.ok(ownedPaymentId, 'expected a seeded payment for MH-U006');
+  // The seeded payment references MH-C001, which is assigned to SEED_DOCTOR (MH-U002).
+  assert.equal((await api(`/api/payments/${ownedPaymentId}`, { session: mintSession(SEED_DOCTOR) })).status, 200);
+  // A different doctor with no link to this patient/consultation is refused.
+  await db.execute(
+    `INSERT INTO users (user_id, name, email, password_hash, role, is_verified, status, token_version)
+     VALUES ('MH-DPAY', 'Unlinked Doctor', 'unlinked-doc@example.com', 'scrypt$16384$8$1$x$bm9o', 'Doctor', TRUE, 'Active', 0)
+     ON DUPLICATE KEY UPDATE status='Active', token_version=0`
+  );
+  const other = mintSession({ user_id: 'MH-DPAY', email: 'unlinked-doc@example.com', role: 'Doctor', token_version: 0 });
+  assert.equal((await api(`/api/payments/${ownedPaymentId}`, { session: other })).status, 403);
+});
+
+// --- Data coherence: triage <-> consultation stay in sync ------------------
+test('nurse discharging a waiting patient cancels the linked pending consultation', async () => {
+  const patient = mintSession(SEED_PATIENT);
+  const nurse = mintSession({ user_id: 'MH-U003', email: 'nurse@mediflow.com', role: 'Nurse', token_version: 0 });
+  const csrf = await getCsrf();
+  // Triage opens a Pending consultation linked by triage_id.
+  const { triageId, consultationId } = await (await api('/api/triage', {
+    method: 'POST', session: patient, csrf,
+    body: { fever: 'No', cough: 'No', chestPain: 'None', duration: '1 day' },
+  })).json();
+
+  const discharged = await api(`/api/nurse/queue/${triageId}`, { method: 'PATCH', session: nurse, csrf, body: { status: 'Discharged' } });
+  assert.equal(discharged.status, 200);
+  const [rows] = await db.execute('SELECT session_status FROM consultations WHERE consultation_id = ?', [consultationId]);
+  assert.equal(rows[0].session_status, 'Cancelled');
+});
+
+test('a doctor completing a consultation marks the linked triage Completed', async () => {
+  const patient = mintSession(SEED_PATIENT);
+  const doctor = mintSession(SEED_DOCTOR);
+  const csrf = await getCsrf();
+  const { triageId, consultationId } = await (await api('/api/triage', {
+    method: 'POST', session: patient, csrf,
+    body: { fever: 'Yes', cough: 'No', chestPain: 'None', duration: '1 day' },
+  })).json();
+  for (const action of ['claim', 'start', 'complete']) {
+    assert.equal((await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action } })).status, 200);
+  }
+  const [rows] = await db.execute('SELECT status FROM triage_submissions WHERE triage_id = ?', [triageId]);
+  assert.equal(rows[0].status, 'Completed');
+});
+
+// --- Medication collection: delivery gating + receipt confirmation ---------
+test('medication: delivery needs an address, self-collect is always allowed, receipt confirms dispatch', async () => {
+  await db.execute(
+    `INSERT INTO users (user_id, name, email, password_hash, role, is_verified, status, token_version, address_encrypted)
+     VALUES ('MH-PMED', 'Med Test Patient', 'med-pt@example.com', 'scrypt$16384$8$1$x$bm9o', 'Patient', TRUE, 'Active', 0, NULL)
+     ON DUPLICATE KEY UPDATE status='Active', token_version=0, address_encrypted=NULL`
+  );
+  await db.execute(
+    `INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status)
+     VALUES ('MH-CMED', 'MH-PMED', 'MH-U002', 'Active')
+     ON DUPLICATE KEY UPDATE session_status='Active'`
+  );
+  await db.execute(
+    `INSERT INTO prescriptions (prescription_id, consultation_id, patient_id, doctor_id, medication_id, medication_name, dosage, frequency, refills, status, collection_method, delivered_at)
+     VALUES ('RX-MED-1', 'MH-CMED', 'MH-PMED', 'MH-U002', 'MED-PARA500', 'Paracetamol 500mg', '1 tab', 'BD', 0, 'Issued', 'SelfCollect', NULL)
+     ON DUPLICATE KEY UPDATE status='Issued', collection_method='SelfCollect', delivered_at=NULL`
+  );
+  const patient = mintSession({ user_id: 'MH-PMED', email: 'med-pt@example.com', role: 'Patient', token_version: 0 });
+  const csrf = await getCsrf();
+
+  // Delivery without an address on file is rejected.
+  assert.equal((await api('/api/patient/prescriptions/RX-MED-1/collection', { method: 'PATCH', session: patient, csrf, body: { method: 'Delivery' } })).status, 400);
+  // Self-collect is always allowed.
+  assert.equal((await api('/api/patient/prescriptions/RX-MED-1/collection', { method: 'PATCH', session: patient, csrf, body: { method: 'SelfCollect' } })).status, 200);
+  // Add an address, then delivery is allowed and persists.
+  await api('/api/me/profile', { method: 'PATCH', session: patient, csrf, body: { address: '1 Test Ave, Singapore' } });
+  assert.equal((await api('/api/patient/prescriptions/RX-MED-1/collection', { method: 'PATCH', session: patient, csrf, body: { method: 'Delivery' } })).status, 200);
+  // Receipt cannot be confirmed before dispatch (still Issued).
+  assert.equal((await api('/api/patient/prescriptions/RX-MED-1/receipt', { method: 'POST', session: patient, csrf })).status, 400);
+  // Pharmacist fulfils (dispatch); patient then confirms receipt.
+  assert.equal((await api('/api/prescriptions/RX-MED-1/fulfil', { method: 'POST', session: mintSession(SEED_PHARMACIST), csrf })).status, 200);
+  assert.equal((await api('/api/patient/prescriptions/RX-MED-1/receipt', { method: 'POST', session: patient, csrf })).status, 200);
+  const [rows] = await db.execute('SELECT collection_method, delivered_at FROM prescriptions WHERE prescription_id = ?', ['RX-MED-1']);
+  assert.equal(rows[0].collection_method, 'Delivery');
+  assert.ok(rows[0].delivered_at);
+});

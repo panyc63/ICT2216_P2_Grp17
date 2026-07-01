@@ -51,6 +51,7 @@ import {
   scanBufferForMalware,
   mintFirebaseCustomToken,
   buildIceServers,
+  safeEqual,
   verifyJwt,
   verifyPassword,
 } from './security.js';
@@ -137,6 +138,10 @@ app.post('/api/reset-password', authLimit, asyncHandler(resetPassword));
 
 app.get('/api/staff', asyncHandler(authenticate), requireRole('Admin'), asyncHandler(listStaff));
 app.post('/api/staff', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(createStaff));
+// Minimal active-doctor list for the nurse queue assignment dropdown.
+app.get('/api/doctors', asyncHandler(authenticate), requireRole('Nurse', 'Admin'), asyncHandler(listDoctors));
+// Recording-session metadata archive (no media) for admin oversight.
+app.get('/api/recordings', asyncHandler(authenticate), requireRole('Admin'), asyncHandler(listRecordings));
 app.patch('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(updateStaff));
 app.delete('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(deactivateStaff));
 
@@ -158,6 +163,9 @@ app.get('/api/inventory', asyncHandler(authenticate), requireRole('Doctor', 'Pha
 app.get('/api/pharmacy/queue', asyncHandler(authenticate), requireRole('Pharmacist', 'Admin'), asyncHandler(listPharmacyQueue));
 app.post('/api/prescriptions/:id/fulfil', asyncHandler(authenticate), requireRole('Pharmacist'), requireRecentReauth, asyncHandler(fulfilPrescription));
 app.get('/api/patient/prescriptions', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(listPatientPrescriptions));
+app.patch('/api/patient/prescriptions/:id/collection', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(setPrescriptionCollection));
+app.post('/api/patient/prescriptions/:id/receipt', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(confirmPrescriptionReceipt));
+app.get('/api/doctor/prescriptions', asyncHandler(authenticate), requireRole('Doctor'), asyncHandler(listDoctorPrescriptions));
 
 app.post('/api/medical-certificates', asyncHandler(authenticate), requireRole('Doctor'), requireRecentReauth, asyncHandler(createMedicalCertificate));
 app.get('/api/medical-certificates/:id', asyncHandler(authenticate), asyncHandler(getMedicalCertificate));
@@ -656,6 +664,26 @@ async function listStaff(_req, res) {
   res.status(200).json(rows);
 }
 
+async function listDoctors(_req, res) {
+  const rows = await query(
+    "SELECT user_id, name FROM users WHERE role = 'Doctor' AND status = 'Active' ORDER BY name ASC"
+  );
+  res.status(200).json(rows);
+}
+
+async function listRecordings(_req, res) {
+  const rows = await query(
+    `SELECT r.recording_id, r.consultation_id, r.started_by, u.name AS started_by_name,
+            r.patient_consent, r.started_at, r.ended_at, c.patient_id, p.name AS patient_name
+     FROM recording_sessions r
+     LEFT JOIN users u ON u.user_id = r.started_by
+     LEFT JOIN consultations c ON c.consultation_id = r.consultation_id
+     LEFT JOIN users p ON p.user_id = c.patient_id
+     ORDER BY r.started_at DESC`
+  );
+  res.status(200).json(rows);
+}
+
 async function createStaff(req, res) {
   const email = assertEmail(req.body.email);
   const name = assertString(req.body.name || email.split('@')[0], 'name', { min: 2, max: 120 });
@@ -755,26 +783,46 @@ async function updateConsultation(req, res) {
   // Doctors may only act on consultations assigned to them (except claiming a free one).
   const isOwningDoctor = req.user.role === 'Doctor' && consultation.doctor_id === req.user.user_id;
 
+  // Propagate a consultation state change back to the triage row that opened it, so
+  // the nurse queue and the doctor console never drift apart. Guarded on triage_id
+  // (older consultations may predate the link) and scoped so we never overwrite a
+  // triage that has already moved past this stage.
+  const syncTriage = async (triageStatus, allowedFrom) => {
+    if (!consultation.triage_id) return;
+    await execute(
+      `UPDATE triage_submissions SET status = ? WHERE triage_id = ? AND status IN (${allowedFrom.map(() => '?').join(', ')})`,
+      [triageStatus, consultation.triage_id, ...allowedFrom]
+    );
+  };
+
   if (action === 'claim') {
     if (req.user.role !== 'Doctor') throw forbidden('Only doctors can claim a consultation.');
     if (consultation.session_status !== 'Pending' || consultation.doctor_id) throw badRequest('Consultation is not available to claim.');
     await execute("UPDATE consultations SET doctor_id = ? WHERE consultation_id = ? AND doctor_id IS NULL", [req.user.user_id, id]);
+    if (consultation.triage_id) await execute('UPDATE triage_submissions SET assigned_doctor_id = ? WHERE triage_id = ?', [req.user.user_id, consultation.triage_id]);
   } else if (action === 'assign') {
     if (!['Nurse', 'Admin'].includes(req.user.role)) throw forbidden();
     const doctorId = assertString(req.body.doctorId, 'doctorId', { min: 4, max: 36 });
     await execute("UPDATE consultations SET doctor_id = ? WHERE consultation_id = ?", [doctorId, id]);
+    if (consultation.triage_id) await execute('UPDATE triage_submissions SET assigned_doctor_id = ? WHERE triage_id = ?', [doctorId, consultation.triage_id]);
   } else if (action === 'start') {
+    // Clinical state changes are the assigned doctor's (or Admin's) action — not a nurse's.
+    if (req.user.role === 'Nurse') throw forbidden('Only the assigned doctor or an admin can start a consultation.');
     if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
     if (consultation.session_status !== 'Pending') throw badRequest('Only a pending consultation can start.');
     await execute("UPDATE consultations SET session_status = 'Active' WHERE consultation_id = ?", [id]);
+    await syncTriage('InConsultation', ['Waiting', 'Called']);
   } else if (action === 'complete') {
+    if (req.user.role === 'Nurse') throw forbidden('Only the assigned doctor or an admin can complete a consultation.');
     if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
     if (consultation.session_status !== 'Active') throw badRequest('Only an active consultation can be completed.');
     await execute("UPDATE consultations SET session_status = 'Completed', completed_at = CURRENT_TIMESTAMP WHERE consultation_id = ?", [id]);
+    await syncTriage('Completed', ['Waiting', 'Called', 'InConsultation']);
   } else if (action === 'cancel') {
     if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
     if (consultation.session_status === 'Completed') throw badRequest('Completed consultations cannot be cancelled.');
     await execute("UPDATE consultations SET session_status = 'Cancelled' WHERE consultation_id = ?", [id]);
+    await syncTriage('Discharged', ['Waiting', 'Called', 'InConsultation']);
   }
 
   await writeAudit(req, { actorId: req.user.user_id, action: `CONSULTATION_${action.toUpperCase()}`, resourceType: 'CONSULTATION', resourceId: id, outcome: 'SUCCESS' });
@@ -846,6 +894,24 @@ async function updateQueue(req, res) {
   if (fields.length === 0) throw badRequest('No supported queue fields supplied.');
   params.push(triageId);
   await execute(`UPDATE triage_submissions SET ${fields.join(', ')} WHERE triage_id = ?`, params);
+
+  // Keep the linked consultation coherent with nurse-side queue actions WITHOUT letting
+  // the nurse drive clinical (Active/Completed) state — that stays doctor-owned.
+  // Assigning a doctor routes the still-pending consultation to them so it surfaces in
+  // their pool; discharging before the visit starts cancels the pending consultation.
+  if (assignedDoctorId) {
+    await execute(
+      "UPDATE consultations SET doctor_id = ? WHERE triage_id = ? AND session_status = 'Pending' AND doctor_id IS NULL",
+      [assignedDoctorId, triageId]
+    );
+  }
+  if (status === 'Discharged') {
+    await execute(
+      "UPDATE consultations SET session_status = 'Cancelled' WHERE triage_id = ? AND session_status = 'Pending'",
+      [triageId]
+    );
+  }
+
   await writeAudit(req, { actorId: req.user.user_id, action: 'UPDATE_QUEUE', resourceType: 'TRIAGE', resourceId: String(triageId), outcome: 'SUCCESS', metadata: { priority, status, assignedDoctorId } });
   res.status(200).json({ message: 'Queue updated.' });
 }
@@ -950,7 +1016,7 @@ function verifyStripeSignature(rawBody, signatureHeader) {
   if (!fields.t || !fields.v1) return false;
   const payload = `${fields.t}.${rawBody}`;
   const expected = cryptoHmac(payload, config.stripeWebhookSecret);
-  return expected === fields.v1;
+  return safeEqual(expected, fields.v1); // timing-safe HMAC comparison
 }
 
 function cryptoHmac(value, secret) {
@@ -962,7 +1028,14 @@ async function getPayment(req, res) {
   const rows = await query('SELECT * FROM payment_events WHERE payment_id = ? LIMIT 1', [paymentId]);
   const payment = rows[0];
   if (!payment) throw notFound('Payment not found.');
-  if (req.user.role === 'Patient' && payment.patient_id !== req.user.user_id) throw forbidden();
+  // Object-level authz: the owning patient, the assigned doctor, or an Admin only.
+  // (Previously any staff role could read any patient's payment by id.)
+  let doctorId = null;
+  if (payment.consultation_id) {
+    const c = await query('SELECT doctor_id FROM consultations WHERE consultation_id = ? LIMIT 1', [payment.consultation_id]);
+    doctorId = c[0]?.doctor_id || null;
+  }
+  if (!canAccessPatientRecord(req.user, payment.patient_id, doctorId)) throw forbidden();
   res.status(200).json(payment);
 }
 
@@ -1020,8 +1093,53 @@ async function listPharmacyQueue(_req, res) {
 
 async function listPatientPrescriptions(req, res) {
   const rows = await query(
-    `SELECT prescription_id, medication_name, dosage, frequency, refills, status, issued_at, fulfilled_at
+    `SELECT prescription_id, medication_name, dosage, frequency, refills, status, collection_method, delivered_at, issued_at, fulfilled_at
      FROM prescriptions WHERE patient_id = ? ORDER BY issued_at DESC`,
+    [req.user.user_id]
+  );
+  res.status(200).json(rows);
+}
+
+// Patient elects self-collection or home delivery for their own medication. Delivery
+// is gated on an address being on file so we never dispatch to nowhere.
+async function setPrescriptionCollection(req, res) {
+  const prescriptionId = assertString(req.params.id, 'prescription id', { min: 1, max: 50 });
+  const method = assertEnum(req.body.method, 'method', ['SelfCollect', 'Delivery']);
+  const rows = await query('SELECT patient_id, status FROM prescriptions WHERE prescription_id = ? LIMIT 1', [prescriptionId]);
+  const rx = rows[0];
+  if (!rx) throw notFound('Prescription not found.');
+  if (rx.patient_id !== req.user.user_id) throw forbidden();
+  if (rx.status === 'Cancelled') throw badRequest('This prescription has been cancelled.');
+  if (method === 'Delivery') {
+    const user = await getUserById(req.user.user_id);
+    if (!decryptText(user?.address_encrypted, config)) throw badRequest('Add a home delivery address in your profile before choosing delivery.');
+  }
+  await execute('UPDATE prescriptions SET collection_method = ? WHERE prescription_id = ?', [method, prescriptionId]);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'SET_COLLECTION_METHOD', resourceType: 'PRESCRIPTION', resourceId: prescriptionId, outcome: 'SUCCESS', metadata: { method } });
+  res.status(200).json({ message: 'Collection method updated.', collection_method: method });
+}
+
+// Patient confirms they received a delivered prescription (final tracking stage).
+async function confirmPrescriptionReceipt(req, res) {
+  const prescriptionId = assertString(req.params.id, 'prescription id', { min: 1, max: 50 });
+  const rows = await query('SELECT patient_id, status, collection_method, delivered_at FROM prescriptions WHERE prescription_id = ? LIMIT 1', [prescriptionId]);
+  const rx = rows[0];
+  if (!rx) throw notFound('Prescription not found.');
+  if (rx.patient_id !== req.user.user_id) throw forbidden();
+  if (rx.collection_method !== 'Delivery') throw badRequest('Only delivery orders can be confirmed as received.');
+  if (rx.status !== 'Fulfilled') throw badRequest('This prescription has not been dispatched yet.');
+  if (rx.delivered_at) throw badRequest('Delivery already confirmed.');
+  await execute('UPDATE prescriptions SET delivered_at = CURRENT_TIMESTAMP WHERE prescription_id = ?', [prescriptionId]);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'CONFIRM_DELIVERY', resourceType: 'PRESCRIPTION', resourceId: prescriptionId, outcome: 'SUCCESS' });
+  res.status(200).json({ message: 'Delivery confirmed.' });
+}
+
+async function listDoctorPrescriptions(req, res) {
+  const rows = await query(
+    `SELECT pr.prescription_id, pr.medication_name, pr.dosage, pr.frequency, pr.refills, pr.status, pr.issued_at,
+            pr.patient_id, u.name AS patient_name
+     FROM prescriptions pr JOIN users u ON u.user_id = pr.patient_id
+     WHERE pr.doctor_id = ? ORDER BY pr.issued_at DESC`,
     [req.user.user_id]
   );
   res.status(200).json(rows);
@@ -1127,9 +1245,12 @@ async function getMedicalCertificate(req, res) {
 
 async function getLatestPatientMedicalCertificate(req, res) {
   const rows = await query(
-    `SELECT * FROM medical_certificates
-     WHERE patient_id = ?
-     ORDER BY issue_date DESC, mc_id DESC
+    `SELECT mc.*, p.name AS patient_name, d.name AS doctor_name
+     FROM medical_certificates mc
+     LEFT JOIN users p ON p.user_id = mc.patient_id
+     LEFT JOIN users d ON d.user_id = mc.doctor_id
+     WHERE mc.patient_id = ?
+     ORDER BY mc.issue_date DESC, mc.mc_id DESC
      LIMIT 1`,
     [req.user.user_id]
   );

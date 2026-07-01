@@ -114,6 +114,8 @@ const saveAddress = async () => {
     profile.address = draftAddress.value.trim()
     isEditing.value = false
     savedNotice.value = true
+    // Auto-dismiss the confirmation so it doesn't linger on the page.
+    setTimeout(() => { savedNotice.value = false }, 4000)
   } catch (err) {
     alert(err.message || 'Could not update profile.')
   }
