@@ -11,12 +11,9 @@
       </div>
 
       <nav class="space-y-1 flex-1">
-        <button @click="activeTab = 'my-consultations'" :class="[activeTab === 'my-consultations' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">
-          My Active Sessions
-        </button>
-        <button @click="activeTab = 'history'" :class="[activeTab === 'history' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">
-          Past History & Logs
-        </button>
+        <button @click="router.push({ name: 'DocDashboard' })" :class="[route.name === 'DocDashboard' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>🏠</span> Dashboard Home</button>
+        <button @click="router.push({ name: 'DocConsult' })" :class="[route.name === 'DocConsult' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>🎥</span> Live Stream Rooms</button>
+        <button @click="router.push({ name: 'DocPrescribe' })" :class="[route.name === 'DocPrescribe' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>📝</span> Rx Prescriptions</button>
       </nav>
       
       <button @click="handleLogout" class="text-left text-red-400 hover:bg-slate-800 px-4 py-2 rounded-lg font-medium text-sm transition-colors">
@@ -25,7 +22,11 @@
     </aside>
 
     <main class="flex-1 p-10">
-      
+      <div class="mb-6 flex gap-2 border-b border-slate-200">
+        <button @click="activeTab = 'my-consultations'" :class="[activeTab === 'my-consultations' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700']" class="px-4 py-2 -mb-px border-b-2 text-sm font-semibold">My Active Sessions</button>
+        <button @click="activeTab = 'history'" :class="[activeTab === 'history' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700']" class="px-4 py-2 -mb-px border-b-2 text-sm font-semibold">Past History &amp; Logs</button>
+      </div>
+
       <div v-if="activeTab === 'my-consultations'">
         <div class="mb-6">
           <h1 class="text-2xl font-bold text-slate-900">Your Consultations</h1>
@@ -58,7 +59,7 @@
               </div>
             </div>
 
-            <div class="flex gap-2">
+            <div class="flex flex-wrap gap-2">
               <button v-if="!room.doctor_id && room.session_status === 'Pending'" @click="act(room, 'claim')" class="flex-1 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white font-medium text-sm rounded-lg">Claim</button>
               <button v-if="room.doctor_id && room.session_status === 'Pending'" @click="act(room, 'start')" class="flex-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg">Start</button>
               <button v-if="room.session_status === 'Active'" @click="act(room, 'complete')" class="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm rounded-lg">Complete</button>
@@ -68,6 +69,7 @@
               <button v-if="room.doctor_id" @click="toggleVideo(room.consultation_id)" class="flex-1 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-sm rounded-lg">
                 {{ openVideoId === room.consultation_id ? 'Hide Video' : 'Video' }}
               </button>
+              <button v-if="room.doctor_id && room.session_status !== 'Cancelled'" @click="prescribeFor(room)" class="flex-1 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-sm rounded-lg">Prescribe</button>
             </div>
             <div v-if="openChatId === room.consultation_id" class="mt-4">
               <ChatPanel :consultation-id="room.consultation_id" />
@@ -111,13 +113,20 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { apiFetch, logout } from '../../services/api'
 import ChatPanel from '../../components/ChatPanel.vue'
 import VideoConsult from '../../components/VideoConsult.vue'
 
 const router = useRouter()
+const route = useRoute()
 const activeTab = ref('my-consultations')
+
+// Jump straight to prescribing for the patient you're treating, with the
+// consultation pre-selected on the prescribe screen.
+const prescribeFor = (room) => {
+  router.push({ name: 'DocPrescribe', query: { consultationId: room.consultation_id } })
+}
 const openChatId = ref('')
 const openVideoId = ref('')
 const toggleChat = (id) => { openChatId.value = openChatId.value === id ? '' : id }

@@ -9,12 +9,9 @@
       </div>
 
       <nav class="space-y-1 flex-1">
-        <button @click="activeTab = 'new-prescription'" :class="[activeTab === 'new-prescription' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">
-          Issue Prescription
-        </button>
-        <button @click="activeTab = 'prescription-history'" :class="[activeTab === 'prescription-history' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors">
-          Recent Orders Log
-        </button>
+        <button @click="router.push({ name: 'DocDashboard' })" :class="[route.name === 'DocDashboard' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>🏠</span> Dashboard Home</button>
+        <button @click="router.push({ name: 'DocConsult' })" :class="[route.name === 'DocConsult' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>🎥</span> Live Stream Rooms</button>
+        <button @click="router.push({ name: 'DocPrescribe' })" :class="[route.name === 'DocPrescribe' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>📝</span> Rx Prescriptions</button>
       </nav>
 
       <button @click="handleLogout" class="text-left text-red-400 hover:bg-slate-800 px-4 py-2 rounded-lg font-medium text-sm transition-colors">
@@ -23,6 +20,10 @@
     </aside>
 
     <main class="flex-1 p-10 max-w-5xl">
+      <div class="mb-6 flex gap-2 border-b border-slate-200">
+        <button @click="activeTab = 'new-prescription'" :class="[activeTab === 'new-prescription' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700']" class="px-4 py-2 -mb-px border-b-2 text-sm font-semibold">Issue Prescription</button>
+        <button @click="activeTab = 'prescription-history'" :class="[activeTab === 'prescription-history' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700']" class="px-4 py-2 -mb-px border-b-2 text-sm font-semibold">Recent Orders Log</button>
+      </div>
 
       <div v-if="activeTab === 'new-prescription'">
         <div class="mb-6">
@@ -146,10 +147,11 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { apiFetch, logout } from '../../services/api'
 
 const router = useRouter()
+const route = useRoute()
 const activeTab = ref('new-prescription')
 
 const currentDoctor = ref({ name: 'Doctor' })
@@ -178,6 +180,13 @@ const loadAll = async () => {
   try { inventory.value = await apiFetch('/inventory') } catch { inventory.value = [] }
   try { consultations.value = await apiFetch('/consultations') } catch { consultations.value = [] }
   try { historyLogs.value = await apiFetch('/doctor/prescriptions') } catch { historyLogs.value = [] }
+  // Arrived via the "Prescribe" button on Live Rooms → pre-select that consultation
+  // (only if it's really one of this doctor's own consultations).
+  const preselect = route.query.consultationId
+  if (preselect && myConsultations.value.some((c) => c.consultation_id === preselect)) {
+    prescriptionForm.value.consultationId = preselect
+    activeTab.value = 'new-prescription'
+  }
 }
 onMounted(loadAll)
 
