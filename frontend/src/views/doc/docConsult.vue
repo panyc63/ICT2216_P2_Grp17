@@ -70,6 +70,7 @@
                 {{ openVideoId === room.consultation_id ? 'Hide Video' : 'Video' }}
               </button>
               <button v-if="room.doctor_id && room.session_status !== 'Cancelled'" @click="prescribeFor(room)" class="flex-1 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-sm rounded-lg">Prescribe</button>
+              <button v-if="room.doctor_id && room.session_status !== 'Cancelled'" @click="issueMcFor(room)" class="flex-1 px-3 py-2 bg-sky-50 hover:bg-sky-100 text-sky-700 font-semibold text-sm rounded-lg">Issue MC</button>
             </div>
             <div v-if="openChatId === room.consultation_id" class="mt-4">
               <ChatPanel :consultation-id="room.consultation_id" />
@@ -126,6 +127,9 @@ const activeTab = ref('my-consultations')
 // consultation pre-selected on the prescribe screen.
 const prescribeFor = (room) => {
   router.push({ name: 'DocPrescribe', query: { consultationId: room.consultation_id } })
+}
+const issueMcFor = (room) => {
+  router.push({ name: 'DocPrescribe', query: { consultationId: room.consultation_id, tab: 'mc' } })
 }
 const openChatId = ref('')
 const openVideoId = ref('')

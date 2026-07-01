@@ -22,6 +22,7 @@
     <main class="flex-1 p-10 max-w-5xl">
       <div class="mb-6 flex gap-2 border-b border-slate-200">
         <button @click="activeTab = 'new-prescription'" :class="[activeTab === 'new-prescription' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700']" class="px-4 py-2 -mb-px border-b-2 text-sm font-semibold">Issue Prescription</button>
+        <button @click="activeTab = 'medical-cert'" :class="[activeTab === 'medical-cert' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700']" class="px-4 py-2 -mb-px border-b-2 text-sm font-semibold">Issue Medical Cert</button>
         <button @click="activeTab = 'prescription-history'" :class="[activeTab === 'prescription-history' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700']" class="px-4 py-2 -mb-px border-b-2 text-sm font-semibold">Recent Orders Log</button>
       </div>
 
@@ -92,6 +93,49 @@
               <p v-if="notice" role="status" class="text-sm font-medium text-emerald-600 mr-auto">{{ notice }}</p>
               <button type="submit" :disabled="submitting || !myConsultations.length" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg shadow-sm transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                 <span>📝</span> {{ submitting ? 'Routing…' : 'Route to Pharmacy' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div v-if="activeTab === 'medical-cert'">
+        <div class="mb-6">
+          <h1 class="text-2xl font-bold text-slate-900">Issue Medical Certificate</h1>
+          <p class="text-sm text-slate-500">Issue a digitally signed MC for one of your consultations. The patient can download and share it; anyone can verify its signature via the public QR link.</p>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+          <form @submit.prevent="submitMc" class="space-y-6">
+            <div>
+              <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">Patient (your active consultation)</label>
+              <select v-model="mcForm.consultationId" required class="mt-1.5 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+                <option value="" disabled>Select a patient consultation</option>
+                <option v-for="c in myConsultations" :key="c.consultation_id" :value="c.consultation_id">
+                  {{ c.patient_name }} — {{ c.consultation_id }} ({{ c.session_status }})
+                </option>
+              </select>
+              <p v-if="!myConsultations.length" class="mt-1 text-xs text-amber-600">
+                No consultations assigned to you yet — claim one under Live Stream Rooms first.
+              </p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">Diagnosis</label>
+                <input v-model="mcForm.diagnosis" type="text" required minlength="3" maxlength="300" placeholder="e.g., Acute viral pharyngitis" class="mt-1.5 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">Valid Until</label>
+                <input v-model="mcForm.validUntil" type="date" required :min="today" class="mt-1.5 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+              </div>
+            </div>
+
+            <div class="flex items-center justify-end gap-4 pt-2">
+              <p v-if="mcError" role="alert" class="text-sm font-medium text-red-600 mr-auto">{{ mcError }}</p>
+              <p v-if="mcNotice" role="status" class="text-sm font-medium text-emerald-600 mr-auto">{{ mcNotice }}</p>
+              <button type="submit" :disabled="mcSubmitting || !myConsultations.length" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg shadow-sm transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                <span>🩺</span> {{ mcSubmitting ? 'Signing…' : 'Issue & Sign MC' }}
               </button>
             </div>
           </form>
@@ -171,6 +215,13 @@ const myConsultations = computed(() =>
 const defaultForm = { consultationId: '', medicationId: '', dosage: '', frequency: 'Once daily', refills: 0, instructions: '' }
 const prescriptionForm = ref({ ...defaultForm })
 
+// Medical certificate issuance (separate state so messages don't bleed across tabs).
+const today = new Date().toISOString().slice(0, 10)
+const mcForm = ref({ consultationId: '', diagnosis: '', validUntil: '' })
+const mcError = ref('')
+const mcNotice = ref('')
+const mcSubmitting = ref(false)
+
 const loadAll = async () => {
   try {
     const me = await apiFetch('/me')
@@ -180,12 +231,17 @@ const loadAll = async () => {
   try { inventory.value = await apiFetch('/inventory') } catch { inventory.value = [] }
   try { consultations.value = await apiFetch('/consultations') } catch { consultations.value = [] }
   try { historyLogs.value = await apiFetch('/doctor/prescriptions') } catch { historyLogs.value = [] }
-  // Arrived via the "Prescribe" button on Live Rooms → pre-select that consultation
-  // (only if it's really one of this doctor's own consultations).
+  // Arrived via the "Prescribe" / "Issue MC" button on Live Rooms → open the right tab
+  // and pre-select that consultation (only if it's really one of this doctor's own).
   const preselect = route.query.consultationId
   if (preselect && myConsultations.value.some((c) => c.consultation_id === preselect)) {
-    prescriptionForm.value.consultationId = preselect
-    activeTab.value = 'new-prescription'
+    if (route.query.tab === 'mc') {
+      activeTab.value = 'medical-cert'
+      mcForm.value.consultationId = preselect
+    } else {
+      activeTab.value = 'new-prescription'
+      prescriptionForm.value.consultationId = preselect
+    }
   }
 }
 onMounted(loadAll)
@@ -218,6 +274,34 @@ const submitPrescription = async () => {
     error.value = err.message || 'Could not issue the prescription.'
   } finally {
     submitting.value = false
+  }
+}
+
+const submitMc = async () => {
+  mcError.value = ''
+  mcNotice.value = ''
+  const consult = myConsultations.value.find((c) => c.consultation_id === mcForm.value.consultationId)
+  if (!consult) { mcError.value = 'Please select one of your patient consultations.'; return }
+  mcSubmitting.value = true
+  try {
+    const res = await apiFetch('/medical-certificates', {
+      method: 'POST',
+      body: JSON.stringify({
+        consultationId: consult.consultation_id,
+        patientId: consult.patient_id,
+        diagnosis: mcForm.value.diagnosis,
+        validUntil: mcForm.value.validUntil,
+      }),
+    })
+    mcNotice.value = `Medical certificate ${res.mcId} issued and signed for ${consult.patient_name}. The patient can download it under “Medical Cert”.`
+    mcForm.value = { consultationId: '', diagnosis: '', validUntil: '' }
+  } catch (err) {
+    // The backend requires a completed payment before an MC is released; surface that.
+    mcError.value = /payment/i.test(err.message || '')
+      ? 'The patient must complete payment before a medical certificate can be issued.'
+      : (err.message || 'Could not issue the medical certificate (recent re-authentication may be required).')
+  } finally {
+    mcSubmitting.value = false
   }
 }
 

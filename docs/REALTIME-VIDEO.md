@@ -44,6 +44,28 @@ configs are in `firebase/` and `deploy/coturn/`.
 4. **Recording:** `POST /api/consultations/:id/recording` (doctor-gated) records **consent + session
    metadata** in `recording_sessions` (no media is stored) — the "audit-ready recording tokens".
 
+## C2. Managed TURN — no ports to open (recommended for the current EC2)
+STUN alone (the default) only works when at least one peer has an open path; **two users on different
+home/campus networks behind symmetric NAT will sit at "Connecting…" forever** without a TURN relay.
+When you can't open inbound ports on the VM, use a **managed TURN provider** — the browser connects
+*outbound* to the provider, so nothing needs to be opened on the EC2.
+
+1. Create a free/low-cost TURN app with a provider (e.g. **Metered `openrelay`**, **Cloudflare
+   Realtime TURN**, or **Twilio NTS**). They give you a relay URL, a username, and a credential.
+2. Put them in `.env.production` (these three keys are already in `.env.production.example`):
+   ```
+   TURN_URLS=turns:relay.example.com:443?transport=tcp,turn:relay.example.com:3478
+   TURN_USERNAME=<provider username>
+   TURN_CREDENTIAL=<provider credential>
+   ```
+   `buildIceServers` (`backend/security.js`) automatically adds these to the ICE server list; no
+   backend change is needed. Prefer a `turns:…:443` URL — it tunnels over TLS/443 and traverses the
+   strictest firewalls.
+3. Redeploy: `docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build`.
+4. Verify: two users on different networks join a call and the status reaches **"Connected"**. If TURN
+   is missing/misconfigured, the client now shows a clear "needs a TURN relay" message after ~20s
+   instead of spinning forever.
+
 ## Environment summary
 ```
 # Uploads / malware scan
@@ -53,7 +75,10 @@ UPLOAD_DIR=uploads
 # Firebase realtime
 FIREBASE_CLIENT_EMAIL=
 FIREBASE_PRIVATE_KEY=
-# WebRTC TURN
+# WebRTC TURN — either self-hosted coturn (HMAC) ...
 TURN_SECRET=
 TURN_URLS=turn:your-host:3478
+# ... OR a managed provider (static creds, no inbound ports needed)
+TURN_USERNAME=
+TURN_CREDENTIAL=
 ```

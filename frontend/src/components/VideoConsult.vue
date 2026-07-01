@@ -60,15 +60,33 @@ const error = ref('')
 let pc = null
 let localStream = null
 let pollTimer = null
+let connectTimer = null
+let hasTurn = false
 let lastSignalId = 0
 let remoteSet = false
 const pendingCandidates = []
+
+// How long to wait for the peer connection to reach a connected state before we
+// tell the user the network almost certainly needs a TURN relay.
+const CONNECT_TIMEOUT_MS = 20000
 
 const sendSignal = (kind, payload) =>
   apiFetch(`/consultations/${props.consultationId}/signal`, {
     method: 'POST',
     body: JSON.stringify({ kind, payload: JSON.stringify(payload) }),
   })
+
+const clearConnectTimer = () => { if (connectTimer) { clearTimeout(connectTimer); connectTimer = null } }
+
+// Called on ICE 'failed' or when the connect timeout elapses without a connection.
+const onConnectTrouble = () => {
+  clearConnectTimer()
+  if (!pc || pc.connectionState === 'connected' || pc.connectionState === 'completed') return
+  status.value = 'Not connected'
+  error.value = hasTurn
+    ? 'Couldn’t connect to the other party. Please check both sides’ network/firewall and try again.'
+    : 'Couldn’t establish a direct connection — this network needs a TURN relay, which the clinic must configure before video calls work across networks.'
+}
 
 const flushCandidates = async () => {
   while (pendingCandidates.length) {
@@ -120,6 +138,8 @@ const start = async () => {
       }).catch(() => {}) // best-effort; never block the call on the metadata write
     }
     const { iceServers } = await apiFetch(`/consultations/${props.consultationId}/rtc-credentials`)
+    // Whether a relay is available at all — used to give a precise message if we can't connect.
+    hasTurn = (iceServers || []).some((s) => /^turns?:/.test(String(s.urls)))
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
     if (localVideo.value) localVideo.value.srcObject = localStream
 
@@ -127,7 +147,21 @@ const start = async () => {
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
     pc.ontrack = (e) => { if (remoteVideo.value) remoteVideo.value.srcObject = e.streams[0] }
     pc.onicecandidate = (e) => { if (e.candidate) sendSignal('candidate', e.candidate) }
-    pc.onconnectionstatechange = () => { status.value = pc ? pc.connectionState : 'closed' }
+    pc.onconnectionstatechange = () => {
+      if (!pc) return
+      const s = pc.connectionState
+      if (s === 'connected' || s === 'completed') {
+        status.value = 'Connected'
+        error.value = ''
+        clearConnectTimer()
+      } else if (s === 'connecting') {
+        status.value = 'Connecting…'
+      } else if (s === 'disconnected') {
+        status.value = 'Reconnecting…'
+      } else if (s === 'failed') {
+        onConnectTrouble()
+      }
+    }
 
     callActive.value = true
     status.value = 'Connecting…'
@@ -139,6 +173,8 @@ const start = async () => {
     }
     await poll()
     pollTimer = setInterval(poll, 1500)
+    // If we never reach a connected state, the network almost always needs a TURN relay.
+    connectTimer = setTimeout(onConnectTrouble, CONNECT_TIMEOUT_MS)
   } catch (err) {
     error.value = err.message || 'Could not start the call. Check camera/microphone permissions.'
     callActive.value = false
@@ -150,6 +186,7 @@ const start = async () => {
 const hangUp = () => {
   if (pollTimer) clearInterval(pollTimer)
   pollTimer = null
+  clearConnectTimer()
   if (pc) { pc.close(); pc = null }
   if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null }
   if (remoteVideo.value) remoteVideo.value.srcObject = null
