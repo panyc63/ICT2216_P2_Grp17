@@ -1,0 +1,13 @@
+{
+  "name": "mediflow-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser end-to-end smoke tests that drive the built MediFlow SPA against a live backend + database.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

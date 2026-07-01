@@ -58,4 +58,16 @@ export default [
       globals: { ...globals.node },
     },
   },
+
+  // Node-context tooling: build config and the Playwright E2E harness run under Node,
+  // not in the browser, so they use Node globals (process, etc.). Placed last so it
+  // overrides the browser globals the frontend block gives frontend/vite.config.js.
+  {
+    files: ['*.config.js', 'frontend/vite.config.js', 'e2e/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+  },
 ];
