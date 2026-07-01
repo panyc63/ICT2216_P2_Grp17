@@ -826,6 +826,12 @@ async function updateConsultation(req, res) {
     await syncTriage('Completed', ['Waiting', 'Called', 'InConsultation']);
   } else if (action === 'cancel') {
     if (req.user.role === 'Doctor' && !isOwningDoctor) throw forbidden();
+    // Nurses run the pre-clinical queue only: they may cancel a Pending consultation (the same
+    // effect as discharging it from the queue) but never an in-progress clinical session —
+    // consistent with nurses being barred from start/complete above.
+    if (req.user.role === 'Nurse' && consultation.session_status !== 'Pending') {
+      throw forbidden('Nurses can only cancel pending consultations.');
+    }
     if (consultation.session_status === 'Completed') throw badRequest('Completed consultations cannot be cancelled.');
     await execute("UPDATE consultations SET session_status = 'Cancelled' WHERE consultation_id = ?", [id]);
     await syncTriage('Discharged', ['Waiting', 'Called', 'InConsultation']);
@@ -1270,6 +1276,12 @@ async function getLatestPatientMedicalCertificate(req, res) {
 
 async function revokeMedicalCertificate(req, res) {
   const mcId = assertString(req.params.id, 'mc id', { min: 4, max: 60 });
+  const rows = await query('SELECT doctor_id FROM medical_certificates WHERE mc_id = ? LIMIT 1', [mcId]);
+  const mc = rows[0];
+  if (!mc) throw notFound('Medical certificate not found.');
+  // Object-level authz: a doctor may revoke only the certificates they issued (issuance is
+  // already scoped via ensureAssignedDoctor); admins may revoke any.
+  if (req.user.role === 'Doctor' && mc.doctor_id !== req.user.user_id) throw forbidden();
   await execute('UPDATE medical_certificates SET is_revoked = TRUE, revoked_at = CURRENT_TIMESTAMP WHERE mc_id = ?', [mcId]);
   await writeAudit(req, { actorId: req.user.user_id, action: 'REVOKE_MC', resourceType: 'MEDICAL_CERTIFICATE', resourceId: mcId, outcome: 'SUCCESS' });
   res.status(200).json({ message: 'Medical certificate revoked.' });

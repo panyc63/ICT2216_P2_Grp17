@@ -652,6 +652,55 @@ test('a doctor completing a consultation marks the linked triage Completed', asy
   assert.equal(rows[0].status, 'Completed');
 });
 
+// --- Least-privilege: object-scoped MC revoke + nurse cancel boundary -------
+test('MC revoke is scoped to the issuing doctor: another doctor is refused, an admin may', async () => {
+  const doctor = mintSession(SEED_DOCTOR);           // MH-U002 issues the certificate
+  const csrf = await getCsrf();
+  const issued = await api('/api/medical-certificates', {
+    method: 'POST', session: doctor, csrf,
+    body: { consultationId: 'MH-C001', patientId: 'MH-U006', diagnosis: 'Tension headache', validUntil: '2030-01-01' },
+  });
+  assert.equal(issued.status, 201);
+  const { mcId } = await issued.json();
+  assert.ok(mcId);
+
+  // A different doctor must not be able to revoke a certificate they did not issue.
+  await db.execute(
+    `INSERT INTO users (user_id, name, email, password_hash, role, is_verified, status, token_version)
+     VALUES ('MH-DREVOKE', 'Other Doctor', 'other-revoke@example.com', 'scrypt$16384$8$1$x$bm9o', 'Doctor', TRUE, 'Active', 0)
+     ON DUPLICATE KEY UPDATE status='Active', token_version=0`
+  );
+  const otherDoctor = mintSession({ user_id: 'MH-DREVOKE', email: 'other-revoke@example.com', role: 'Doctor', token_version: 0 });
+  assert.equal((await api(`/api/medical-certificates/${mcId}/revoke`, { method: 'POST', session: otherDoctor, csrf, body: {} })).status, 403);
+  let [rows] = await db.execute('SELECT is_revoked FROM medical_certificates WHERE mc_id = ?', [mcId]);
+  assert.equal(Boolean(rows[0].is_revoked), false);  // the refused attempt changed nothing
+
+  // An admin may revoke any certificate.
+  const admin = mintSession({ user_id: 'MH-U001', email: 'admin@mediflow.com', role: 'Admin', token_version: 0 });
+  assert.equal((await api(`/api/medical-certificates/${mcId}/revoke`, { method: 'POST', session: admin, csrf, body: {} })).status, 200);
+  [rows] = await db.execute('SELECT is_revoked FROM medical_certificates WHERE mc_id = ?', [mcId]);
+  assert.equal(Boolean(rows[0].is_revoked), true);
+});
+
+test('a nurse may cancel a pending consultation but not an active one (least privilege)', async () => {
+  const patient = mintSession(SEED_PATIENT);
+  const doctor = mintSession(SEED_DOCTOR);
+  const nurse = mintSession({ user_id: 'MH-U003', email: 'nurse@mediflow.com', role: 'Nurse', token_version: 0 });
+  const csrf = await getCsrf();
+
+  // Pending consultation: a nurse cancel is allowed (equivalent to a queue discharge).
+  const { consultationId: pending } = await (await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} })).json();
+  assert.equal((await api(`/api/consultations/${pending}`, { method: 'PATCH', session: nurse, csrf, body: { action: 'cancel' } })).status, 200);
+
+  // Active (in-progress clinical) consultation: a nurse cancel is refused and state is unchanged.
+  const { consultationId: active } = await (await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} })).json();
+  await api(`/api/consultations/${active}`, { method: 'PATCH', session: doctor, csrf, body: { action: 'claim' } });
+  await api(`/api/consultations/${active}`, { method: 'PATCH', session: doctor, csrf, body: { action: 'start' } });
+  assert.equal((await api(`/api/consultations/${active}`, { method: 'PATCH', session: nurse, csrf, body: { action: 'cancel' } })).status, 403);
+  const [rows] = await db.execute('SELECT session_status FROM consultations WHERE consultation_id = ?', [active]);
+  assert.equal(rows[0].session_status, 'Active');
+});
+
 // --- Medication collection: delivery gating + receipt confirmation ---------
 test('medication: delivery needs an address, self-collect is always allowed, receipt confirms dispatch', async () => {
   await db.execute(
