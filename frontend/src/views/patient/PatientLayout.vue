@@ -41,7 +41,6 @@ const handleLogout = () => logout(router)
 const navLinks = [
   { to: '/patient/profile', label: 'Profile' },
   { to: '/patient/book-consultation', label: 'Book Consultation' },
-  { to: '/patient/questionnaire', label: 'Questionnaire' },
   { to: '/patient/medication-collection', label: 'Medication' },
   { to: '/patient/payment', label: 'Payment' },
   { to: '/patient/prescription', label: 'Prescription' },
