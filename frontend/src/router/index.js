@@ -22,7 +22,6 @@ import { dashboardForRole, getCurrentSession } from '../services/api'
 import PatientLayout from '../views/patient/PatientLayout.vue'
 import Profile from '../views/patient/Profile.vue'
 import BookConsultation from '../views/patient/BookConsultation.vue'
-import Questionnaire from '../views/patient/Questionnaire.vue'
 import MedicationCollection from '../views/patient/MedicationCollection.vue'
 import Payment from '../views/patient/Payment.vue'
 import Prescription from '../views/patient/Prescription.vue'
@@ -56,7 +55,9 @@ const routes = [
       { path: '', redirect: '/patient/profile' },
       { path: 'profile', name: 'PatientProfile', component: Profile },
       { path: 'book-consultation', name: 'BookConsultation', component: BookConsultation },
-      { path: 'questionnaire', name: 'Questionnaire', component: Questionnaire },
+      // The questionnaire is now the intake step inside Book Consultation; keep this
+      // path as a redirect so old links/bookmarks don't 404.
+      { path: 'questionnaire', redirect: '/patient/book-consultation' },
       { path: 'medication-collection', name: 'MedicationCollection', component: MedicationCollection },
       { path: 'payment', name: 'Payment', component: Payment },
       { path: 'prescription', name: 'Prescription', component: Prescription },

@@ -3,22 +3,32 @@
     <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
       <div>
         <h1 class="text-2xl font-bold text-slate-900 tracking-tight">My Consultations</h1>
-        <p class="text-sm text-slate-500">Request a tele-consultation; a doctor will pick it up, then you can chat in real time.</p>
+        <p class="text-sm text-slate-500">Start a tele-consultation by sharing your symptoms; a doctor picks it up, then you can chat or video in real time.</p>
       </div>
       <button
-        @click="requestConsultation"
-        :disabled="requesting"
-        class="px-4 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        v-if="!showForm"
+        @click="showForm = true"
+        class="px-4 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700"
       >
-        {{ requesting ? 'Requesting…' : '+ Request Consultation' }}
+        + Start New Consultation
       </button>
     </div>
 
     <p v-if="error" role="alert" class="mb-4 text-sm font-medium text-red-600">{{ error }}</p>
     <p v-if="notice" role="status" class="mb-4 text-sm font-medium text-emerald-600">{{ notice }}</p>
 
-    <div v-if="!consultations.length" class="bg-white border border-slate-200 rounded-xl p-10 text-center text-slate-500 max-w-3xl">
-      No consultations yet. Click <span class="font-semibold">“Request Consultation”</span> to start one.
+    <!-- New consultation = pre-consultation questionnaire (triage). Submitting opens the
+         linked, prioritized consultation, so this is the single booking entry point. -->
+    <div v-if="showForm" class="mb-6 bg-white border border-slate-200 rounded-2xl shadow-sm p-6 max-w-3xl">
+      <div class="mb-4">
+        <h2 class="text-lg font-bold text-slate-900">Pre-Consultation Questionnaire</h2>
+        <p class="text-sm text-slate-500">Help the doctor prepare by sharing your current symptoms. This opens your consultation and sets its priority.</p>
+      </div>
+      <TriageForm cancellable @submitted="onTriageSubmitted" @cancel="showForm = false" />
+    </div>
+
+    <div v-if="!consultations.length && !showForm" class="bg-white border border-slate-200 rounded-xl p-10 text-center text-slate-500 max-w-3xl">
+      No consultations yet. Click <span class="font-semibold">“Start New Consultation”</span> to begin.
     </div>
 
     <div v-else class="grid gap-4 max-w-3xl">
@@ -59,9 +69,10 @@ import { ref, onMounted } from 'vue'
 import { apiFetch } from '../../services/api'
 import ChatPanel from '../../components/ChatPanel.vue'
 import VideoConsult from '../../components/VideoConsult.vue'
+import TriageForm from '../../components/TriageForm.vue'
 
 const consultations = ref([])
-const requesting = ref(false)
+const showForm = ref(false)
 const error = ref('')
 const notice = ref('')
 const openChatId = ref('')
@@ -75,19 +86,12 @@ const load = async () => {
   }
 }
 
-const requestConsultation = async () => {
-  requesting.value = true
+// Triage submit opened the consultation server-side; surface the priority and refresh.
+const onTriageSubmitted = async (result) => {
   error.value = ''
-  notice.value = ''
-  try {
-    const res = await apiFetch('/consultations', { method: 'POST', body: JSON.stringify({}) })
-    notice.value = `Consultation ${res.consultationId} requested — status: ${res.status}.`
-    await load()
-  } catch (err) {
-    error.value = err.message || 'Could not request a consultation.'
-  } finally {
-    requesting.value = false
-  }
+  notice.value = `Triage priority: ${result.priority} — consultation ${result.consultationId} opened and placed in the queue.`
+  showForm.value = false
+  await load()
 }
 
 const toggleChat = (id) => { openChatId.value = openChatId.value === id ? '' : id }
