@@ -1422,6 +1422,12 @@ async function postSignal(req, res) {
   await ensureConsultationAccess(req.user, consultationId);
   const kind = assertEnum(req.body.kind, 'kind', ['offer', 'answer', 'candidate']);
   const payload = assertString(req.body.payload, 'payload', { min: 1, max: 50000 });
+  // A new offer begins a fresh negotiation. Clear any leftover signalling from previous
+  // attempts on this consultation so the peer never replays stale offers/answers/candidates
+  // (mismatched DTLS fingerprints/ICE ufrags corrupt the handshake and the call never connects).
+  if (kind === 'offer') {
+    await execute('DELETE FROM signaling_messages WHERE consultation_id = ?', [consultationId]);
+  }
   const result = await execute(
     'INSERT INTO signaling_messages (consultation_id, sender_id, kind, payload) VALUES (?, ?, ?, ?)',
     [consultationId, req.user.user_id, kind, payload]
