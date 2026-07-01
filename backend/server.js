@@ -13,10 +13,12 @@ import {
   applyCors,
   applySecurityHeaders,
   assertEmail,
+  assertStaffEmail,
   assertEnum,
   assertOptionalString,
   assertPassword,
   assertPositiveInteger,
+  assertNonNegativeInteger,
   assertString,
   asyncHandler,
   auditMetadata,
@@ -55,6 +57,7 @@ import {
   verifyJwt,
   verifyPassword,
 } from './security.js';
+import { scheduleCleanup } from './cleanup.js';
 
 dotenv.config();
 
@@ -685,7 +688,7 @@ async function listRecordings(_req, res) {
 }
 
 async function createStaff(req, res) {
-  const email = assertEmail(req.body.email);
+  const email = assertStaffEmail(req.body.email, config.staffEmailDomains);
   const name = assertString(req.body.name || email.split('@')[0], 'name', { min: 2, max: 120 });
   const role = assertEnum(req.body.role, 'role', STAFF_ROLES.filter((candidate) => candidate !== 'Admin'));
   const password = assertPassword(req.body.password);
@@ -1426,7 +1429,8 @@ async function postSignal(req, res) {
 async function getSignals(req, res) {
   const consultationId = assertString(req.params.id, 'consultation id', { min: 4, max: 36 });
   await ensureConsultationAccess(req.user, consultationId);
-  const since = req.query.since ? assertPositiveInteger(req.query.since, 'since') : 0;
+  // `?since=0` is the frontend's first poll — must be accepted (0 is valid), not rejected.
+  const since = req.query.since !== undefined ? assertNonNegativeInteger(req.query.since, 'since') : 0;
   // Return only the peer's signals (never echo the caller's own).
   const rows = await query(
     `SELECT signal_id, sender_id, kind, payload, created_at
@@ -1480,9 +1484,21 @@ async function assertDatabaseConnection() {
   console.log('Successfully connected to the MySQL database.');
 }
 
+// System actor for background jobs (writeAudit reads req.ip / req.get).
+const systemReq = { ip: 'system', get: () => 'cleanup-job' };
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   assertDatabaseConnection()
     .then(() => {
+      // Active DB state housekeeping (expired OTPs/reset tokens, dead sign-ups, stale
+      // triage + signalling). Skipped under tests so it can't race fixtures.
+      if (process.env.NODE_ENV !== 'test') {
+        scheduleCleanup(db, {
+          onRun: (summary) => writeAudit(systemReq, {
+            actorId: 'system', action: 'DB_STATE_CLEANUP', resourceType: 'SYSTEM', outcome: 'SUCCESS', metadata: summary,
+          }),
+        });
+      }
       app.listen(config.port, () => {
         console.log(`Backend server is running on port ${config.port}.`);
       });

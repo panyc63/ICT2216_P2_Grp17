@@ -1,6 +1,10 @@
 CREATE DATABASE IF NOT EXISTS mediflow_db;
 USE mediflow_db;
 
+-- DB account isolation (DDL vs DML): the runtime app should connect as a DML-only user,
+-- not root. Because these need real passwords (kept out of git), they are provisioned by
+-- ops/db/create-app-users.sh rather than hardcoded here. See ops/db/README.md.
+
 DROP TRIGGER IF EXISTS prevent_security_audit_logs_update;
 DROP TRIGGER IF EXISTS prevent_security_audit_logs_delete;
 

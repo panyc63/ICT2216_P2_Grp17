@@ -6,7 +6,9 @@ import {
   assertEnum,
   assertOptionalString,
   assertPassword,
+  assertStaffEmail,
   assertPositiveInteger,
+  assertNonNegativeInteger,
   assertString,
   auditMetadata,
   csrfGuard,
@@ -303,6 +305,15 @@ test('assertPassword enforces the minimum length policy', () => {
   assert.equal(assertPassword('LongEnough1!'), 'LongEnough1!');
 });
 
+test('assertStaffEmail allows workplace domains and blocks generic inboxes', () => {
+  const domains = ['mediflow.com', 'hospital.sg'];
+  assert.equal(assertStaffEmail('Dr.House@Mediflow.com', domains), 'dr.house@mediflow.com');
+  assert.equal(assertStaffEmail('nurse@hospital.sg', domains), 'nurse@hospital.sg');
+  assert.throws(() => assertStaffEmail('someone@gmail.com', domains), /workplace/);
+  // A lookalike domain must not slip through.
+  assert.throws(() => assertStaffEmail('evil@notmediflow.com', domains), /workplace/);
+});
+
 test('assertOptionalString maps empty/undefined to null but validates when present', () => {
   assert.equal(assertOptionalString(undefined, 'phone', { min: 3, max: 30 }), null);
   assert.equal(assertOptionalString('', 'phone', { min: 3, max: 30 }), null);
@@ -315,6 +326,13 @@ test('assertPositiveInteger enforces an upper bound and rejects non-positive val
   assert.throws(() => assertPositiveInteger('0', 'id'));
   assert.throws(() => assertPositiveInteger('-5', 'id'));
   assert.throws(() => assertPositiveInteger('9999', 'id', { max: 100 }));
+});
+
+test('assertNonNegativeInteger allows 0 (WebRTC ?since=0) but rejects negatives/junk', () => {
+  assert.equal(assertNonNegativeInteger('0', 'since'), 0);
+  assert.equal(assertNonNegativeInteger('7', 'since'), 7);
+  assert.throws(() => assertNonNegativeInteger('-1', 'since'));
+  assert.throws(() => assertNonNegativeInteger('1 OR 1=1', 'since'));
 });
 
 test('assertString enforces a supplied character pattern', () => {
