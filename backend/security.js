@@ -52,6 +52,12 @@ export function getConfig() {
     // not self-hosting coturn. Optional: STUN-only still works for most P2P calls.
     turnUsername: process.env.TURN_USERNAME || '',
     turnCredential: process.env.TURN_CREDENTIAL || '',
+    // Staff (Doctor/Nurse/Pharmacist/Admin) accounts may only be created with an official
+    // workplace email domain. Comma-separated; defaults to the clinic domain.
+    staffEmailDomains: (process.env.STAFF_EMAIL_DOMAINS || 'mediflow.com')
+      .split(',')
+      .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+      .filter(Boolean),
   };
 
   if (missing.length > 0) {
@@ -424,6 +430,16 @@ export function assertPositiveInteger(value, field, { max = Number.MAX_SAFE_INTE
   return parsed;
 }
 
+// Like assertPositiveInteger but allows 0 — used for cursor/offset params such as the
+// WebRTC signalling `?since=0` first poll, which must not be rejected.
+export function assertNonNegativeInteger(value, field, { max = Number.MAX_SAFE_INTEGER } = {}) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) {
+    throw badRequest(`${field} must be a non-negative integer.`);
+  }
+  return parsed;
+}
+
 export function assertEmail(value) {
   return assertString(value, 'email', {
     min: 5,
@@ -434,6 +450,17 @@ export function assertEmail(value) {
 
 export function assertPassword(value) {
   return assertString(value, 'password', { min: 8, max: 128 });
+}
+
+// Staff onboarding is restricted to official workplace domains — blocks provisioning a
+// privileged (Doctor/Nurse/Pharmacist/Admin) account with a generic inbox (gmail, etc.).
+export function assertStaffEmail(value, allowedDomains = []) {
+  const email = assertEmail(value);
+  const domain = email.split('@')[1];
+  if (!allowedDomains.includes(domain)) {
+    throw badRequest(`Staff accounts must use an official workplace email (${allowedDomains.map((d) => '@' + d).join(', ')}).`);
+  }
+  return email;
 }
 
 export function badRequest(message) {

@@ -14,6 +14,7 @@ import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import mysql from 'mysql2/promise';
 import { signJwt, sessionPayload, hashToken } from './security.js';
+import { runCleanup } from './cleanup.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const JWT_SECRET = process.env.JWT_SECRET || 'ci-only-jwt-secret-change-me-32-bytes-minimum';
@@ -115,6 +116,18 @@ test('correct role is allowed (RBAC)', async () => {
   const res = await api('/api/staff', { session: mintSession(SEED_ADMIN) });
   assert.equal(res.status, 200);
   assert.equal(Array.isArray(await res.json()), true);
+});
+
+test('staff onboarding is restricted to workplace email domains', async () => {
+  await db.execute("DELETE FROM users WHERE email = 'newdoc@mediflow.com'").catch(() => {});
+  const admin = mintSession(SEED_ADMIN);
+  const csrf = await getCsrf();
+  // A generic inbox cannot be provisioned as a privileged (Doctor) account.
+  const bad = await api('/api/staff', { method: 'POST', session: admin, csrf, body: { name: 'Gmail Doc', email: 'quack@gmail.com', password: 'Password123!', role: 'Doctor' } });
+  assert.equal(bad.status, 400);
+  // The official workplace domain is accepted.
+  const good = await api('/api/staff', { method: 'POST', session: admin, csrf, body: { name: 'Clinic Doc', email: 'newdoc@mediflow.com', password: 'Password123!', role: 'Doctor' } });
+  assert.equal(good.status, 201);
 });
 
 // --- Object-level authorization ------------------------------------------
@@ -487,9 +500,13 @@ test('signaling relay: participants exchange offer/candidate; a third party is b
   const { consultationId } = await (await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} })).json();
   await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action: 'claim' } });
 
+  // Regression: the frontend's first poll is `?since=0`, which must be accepted (was a 400).
+  const firstPoll = await api(`/api/consultations/${consultationId}/signal?since=0`, { session: patient });
+  assert.equal(firstPoll.status, 200);
+
   // Doctor posts an offer; patient (peer) sees it; doctor does NOT see their own.
   assert.equal((await api(`/api/consultations/${consultationId}/signal`, { method: 'POST', session: doctor, csrf, body: { kind: 'offer', payload: '{"type":"offer"}' } })).status, 201);
-  const peerView = await (await api(`/api/consultations/${consultationId}/signal`, { session: patient })).json();
+  const peerView = await (await api(`/api/consultations/${consultationId}/signal?since=0`, { session: patient })).json();
   assert.equal(peerView.some((s) => s.kind === 'offer'), true);
   const selfView = await (await api(`/api/consultations/${consultationId}/signal`, { session: doctor })).json();
   assert.equal(selfView.length, 0);
@@ -652,4 +669,23 @@ test('medication: delivery needs an address, self-collect is always allowed, rec
   const [rows] = await db.execute('SELECT collection_method, delivered_at FROM prescriptions WHERE prescription_id = ?', ['RX-MED-1']);
   assert.equal(rows[0].collection_method, 'Delivery');
   assert.ok(rows[0].delivered_at);
+});
+
+// --- SITBank-parity: active DB state cleanup -------------------------------
+test('state cleanup purges expired/dead rows and leaves live data intact', async () => {
+  // Old WebRTC signalling (3 days) + an expired reset token should be purged.
+  await db.execute("INSERT INTO signaling_messages (consultation_id, sender_id, kind, payload, created_at) VALUES ('MH-C001','MH-U006','candidate','{}', NOW() - INTERVAL 3 DAY)");
+  await db.execute("UPDATE users SET reset_token_hash = 'deadbeef', reset_expires_at = NOW() - INTERVAL 1 HOUR WHERE user_id = 'MH-U006'");
+  // A fresh signal must survive.
+  await db.execute("INSERT INTO signaling_messages (consultation_id, sender_id, kind, payload) VALUES ('MH-C001','MH-U006','offer','{\"fresh\":true}')");
+
+  const summary = await runCleanup(db);
+  assert.ok(typeof summary.old_signaling === 'number');
+
+  const [stale] = await db.execute("SELECT COUNT(*) AS n FROM signaling_messages WHERE consultation_id='MH-C001' AND created_at < (NOW() - INTERVAL 1 DAY)");
+  assert.equal(stale[0].n, 0); // old signal gone
+  const [fresh] = await db.execute("SELECT COUNT(*) AS n FROM signaling_messages WHERE consultation_id='MH-C001' AND payload LIKE '%fresh%'");
+  assert.equal(fresh[0].n, 1); // recent signal kept
+  const [u] = await db.execute("SELECT reset_token_hash FROM users WHERE user_id='MH-U006'");
+  assert.equal(u[0].reset_token_hash, null); // expired reset token cleared
 });

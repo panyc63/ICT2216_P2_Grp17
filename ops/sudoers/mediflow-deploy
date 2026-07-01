@@ -1,0 +1,20 @@
+# /etc/sudoers.d/mediflow-deploy
+#
+# Least-privilege for the CI/SSH deployment account. Instead of putting the deploy user in
+# the `docker` group (which is root-equivalent) or granting blanket sudo, this restricts it
+# to ONLY the container-lifecycle commands the deploy workflow runs.
+#
+# Replace `deploy` with your actual DEPLOY_SSH_USER and the paths with your DEPLOY_PATH.
+# Install as root:  install -m 440 -o root -g root ops/sudoers/mediflow-deploy /etc/sudoers.d/mediflow-deploy
+# Validate syntax:  visudo -cf /etc/sudoers.d/mediflow-deploy
+
+Cmnd_Alias MEDIFLOW_DEPLOY = \
+    /usr/bin/git -C /home/deploy/ICT2216_P2_Grp17 pull --ff-only, \
+    /usr/bin/docker compose -f /home/deploy/ICT2216_P2_Grp17/docker-compose.prod.yml --env-file /home/deploy/ICT2216_P2_Grp17/.env.production up -d --build, \
+    /usr/bin/docker compose -f /home/deploy/ICT2216_P2_Grp17/docker-compose.prod.yml --env-file /home/deploy/ICT2216_P2_Grp17/.env.production down, \
+    /usr/bin/docker compose -f /home/deploy/ICT2216_P2_Grp17/docker-compose.prod.yml --env-file /home/deploy/ICT2216_P2_Grp17/.env.production restart, \
+    /usr/bin/docker compose -f /home/deploy/ICT2216_P2_Grp17/docker-compose.prod.yml logs --tail 100, \
+    /usr/bin/docker image prune -f
+
+# NOPASSWD so non-interactive CI over SSH works; scoped strictly to the alias above.
+deploy ALL=(root) NOPASSWD: MEDIFLOW_DEPLOY
