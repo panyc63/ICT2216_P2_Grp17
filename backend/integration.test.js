@@ -516,6 +516,24 @@ test('signaling relay: participants exchange offer/candidate; a third party is b
   assert.equal((await api(`/api/consultations/${consultationId}/signal`, { method: 'POST', session: intruder, csrf, body: { kind: 'candidate', payload: '{}' } })).status, 403);
 });
 
+test('a new offer wipes stale signalling so peers never replay old sessions', async () => {
+  const patient = mintSession(SEED_PATIENT);
+  const doctor = mintSession(SEED_DOCTOR);
+  const csrf = await getCsrf();
+  const { consultationId } = await (await api('/api/consultations', { method: 'POST', session: patient, csrf, body: {} })).json();
+  await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action: 'claim' } });
+
+  // Leftover signalling from a previous attempt (both sides).
+  await api(`/api/consultations/${consultationId}/signal`, { method: 'POST', session: doctor, csrf, body: { kind: 'offer', payload: '{"type":"offer","gen":1}' } });
+  await api(`/api/consultations/${consultationId}/signal`, { method: 'POST', session: patient, csrf, body: { kind: 'answer', payload: '{"type":"answer"}' } });
+  await api(`/api/consultations/${consultationId}/signal`, { method: 'POST', session: patient, csrf, body: { kind: 'candidate', payload: '{"stale":true}' } });
+
+  // A fresh offer clears everything and inserts only itself.
+  await api(`/api/consultations/${consultationId}/signal`, { method: 'POST', session: doctor, csrf, body: { kind: 'offer', payload: '{"type":"offer","gen":2}' } });
+  const [rows] = await db.execute('SELECT COUNT(*) AS n FROM signaling_messages WHERE consultation_id = ?', [consultationId]);
+  assert.equal(rows[0].n, 1); // only the new offer survives
+});
+
 test('triage opens a linked consultation and shortnessOfBreath drives Emergency priority', async () => {
   const patient = mintSession(SEED_PATIENT);
   const csrf = await getCsrf();

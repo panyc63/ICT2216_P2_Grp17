@@ -1,13 +1,18 @@
 name: Deploy to VM
 
-# OPT-IN continuous deployment. Manual by default so it never fails for forks that
-# haven't configured a server. To deploy automatically, add `push: branches: [main]`
-# and configure the repository secrets below (Settings -> Secrets and variables -> Actions):
+# Continuous deployment, gated on CI. A push to main runs the "CI" workflow; only when CI
+# succeeds does this deploy fire (via workflow_run), so a red build never reaches production.
+# workflow_dispatch is kept as a manual fallback. Configure the repository secrets below
+# (Settings -> Secrets and variables -> Actions):
 #   DEPLOY_SSH_HOST   - VM public IP / hostname
 #   DEPLOY_SSH_USER   - SSH user (e.g. ubuntu)
 #   DEPLOY_SSH_KEY    - private SSH key with access to the VM
 #   DEPLOY_PATH       - path to the cloned repo on the VM (e.g. /home/ubuntu/ICT2216_P2_Grp17)
 on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -21,6 +26,8 @@ jobs:
   deploy:
     name: SSH redeploy
     runs-on: ubuntu-latest
+    # Manual runs always deploy; automatic runs only deploy when the triggering CI passed.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     # Records a GitHub Deployment against the "production" environment on every run
     # (populates the repo's Environments/Deployments panel and gives a deploy history).
     # Add environment protection rules/required reviewers under Settings -> Environments.

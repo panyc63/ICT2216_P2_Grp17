@@ -64,7 +64,9 @@ let connectTimer = null
 let hasTurn = false
 let lastSignalId = 0
 let remoteSet = false
+let signalingReady = false
 const pendingCandidates = []
+const outgoingCandidates = []
 
 // How long to wait for the peer connection to reach a connected state before we
 // tell the user the network almost certainly needs a TURN relay.
@@ -96,6 +98,13 @@ const flushCandidates = async () => {
   }
 }
 
+// Hold our own ICE candidates until AFTER our offer/answer is posted. A new offer clears
+// the signalling channel server-side, so candidates sent before it would be wiped.
+const flushOutgoing = () => {
+  signalingReady = true
+  while (outgoingCandidates.length) sendSignal('candidate', outgoingCandidates.shift())
+}
+
 const poll = async () => {
   if (!pc) return
   let signals
@@ -114,6 +123,7 @@ const poll = async () => {
         const answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
         await sendSignal('answer', answer)
+        flushOutgoing()
       } else if (s.kind === 'answer' && isDoctor) {
         await pc.setRemoteDescription(new RTCSessionDescription(data))
         remoteSet = true
@@ -148,7 +158,11 @@ const start = async () => {
     pc = new RTCPeerConnection({ iceServers })
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
     pc.ontrack = (e) => { if (remoteVideo.value) remoteVideo.value.srcObject = e.streams[0] }
-    pc.onicecandidate = (e) => { if (e.candidate) sendSignal('candidate', e.candidate) }
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) return
+      if (signalingReady) sendSignal('candidate', e.candidate)
+      else outgoingCandidates.push(e.candidate) // buffer until our SDP is posted
+    }
     pc.onconnectionstatechange = () => {
       if (!pc) return
       const s = pc.connectionState
@@ -171,7 +185,8 @@ const start = async () => {
     if (isDoctor) {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
-      await sendSignal('offer', offer)
+      await sendSignal('offer', offer) // clears stale signalling server-side
+      flushOutgoing()
     }
     await poll()
     pollTimer = setInterval(poll, 1500)
@@ -194,8 +209,10 @@ const hangUp = () => {
   if (remoteVideo.value) remoteVideo.value.srcObject = null
   callActive.value = false
   remoteSet = false
+  signalingReady = false
   lastSignalId = 0
   pendingCandidates.length = 0
+  outgoingCandidates.length = 0
   status.value = 'Call ended'
 }
 
