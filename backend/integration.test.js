@@ -333,20 +333,25 @@ test('consultation lifecycle: patient books, doctor claims/starts/completes', as
   assert.equal(booked.status, 201);
   const { consultationId } = await booked.json();
 
-  const mine = await (await api('/api/consultations', { session: patient })).json();
-  assert.equal(mine.some((c) => c.consultation_id === consultationId), true);
+  try {
+    const mine = await (await api('/api/consultations', { session: patient })).json();
+    assert.equal(mine.some((c) => c.consultation_id === consultationId), true);
 
-  // RBAC: a patient cannot drive the clinical state machine.
-  const patientPatch = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: patient, csrf, body: { action: 'start' } });
-  assert.equal(patientPatch.status, 403);
+    // RBAC: a patient cannot drive the clinical state machine.
+    const patientPatch = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: patient, csrf, body: { action: 'start' } });
+    assert.equal(patientPatch.status, 403);
 
-  for (const action of ['claim', 'start', 'complete']) {
-    const r = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action } });
-    assert.equal(r.status, 200);
+    for (const action of ['claim', 'start', 'complete']) {
+      const r = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action } });
+      assert.equal(r.status, 200);
+    }
+    const [rows] = await db.execute('SELECT doctor_id, session_status FROM consultations WHERE consultation_id = ?', [consultationId]);
+    assert.equal(rows[0].doctor_id, SEED_DOCTOR.user_id);
+    assert.equal(rows[0].session_status, 'Completed');
+  } finally {
+    // Clean up the leaked consultation so it doesn't break the payment test later
+    await db.execute('DELETE FROM consultations WHERE consultation_id = ?', [consultationId]);
   }
-  const [rows] = await db.execute('SELECT doctor_id, session_status FROM consultations WHERE consultation_id = ?', [consultationId]);
-  assert.equal(rows[0].doctor_id, SEED_DOCTOR.user_id);
-  assert.equal(rows[0].session_status, 'Completed');
 });
 
 test('object-level: a doctor cannot act on a consultation assigned to another doctor', async () => {
