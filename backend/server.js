@@ -158,7 +158,8 @@ app.get('/api/csrf', (req, res) => {
 app.use(csrfGuard(config));
 
 app.post('/api/register', registerLimit, asyncHandler(requireTurnstile), asyncHandler(registerPatient));
-app.get('/api/verify-email/:token', tokenLimit, asyncHandler(verifyEmail));
+app.post('/api/verify-email', tokenLimit, asyncHandler(verifyEmailOtp));
+app.post('/api/verify-email/resend', resetLimit, asyncHandler(resendVerification));
 app.post('/api/login', cryptoLimit, asyncHandler(requireTurnstile), asyncHandler(login));
 app.post('/api/login/mfa', cryptoLimit, asyncHandler(completeLoginMfa));
 app.post('/api/logout', asyncHandler(authenticate), asyncHandler(logout));
@@ -464,23 +465,17 @@ async function registerPatient(req, res) {
   }
 
   const userId = await nextUserId();
-  const verificationToken = randomToken();
-  const verificationHash = hashToken(verificationToken);
+  const otp = generateEmailOtp();
   const passwordHash = await hashPassword(password);
+  // Store the OTP hash + a 15-minute expiry in the existing verification columns (no migration).
   await execute(
     `INSERT INTO users
      (user_id, name, email, password_hash, role, is_verified, status, email_verification_hash, email_verification_expires_at)
-     VALUES (?, ?, ?, ?, 'Patient', FALSE, 'PendingVerification', ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
-    [userId, name, email, passwordHash, verificationHash]
+     VALUES (?, ?, ?, ?, 'Patient', FALSE, 'PendingVerification', ?, DATE_ADD(NOW(), INTERVAL 15 MINUTE))`,
+    [userId, name, email, passwordHash, hashToken(otp)]
   );
 
-  const verificationUrl = `${config.backendPublicUrl}/api/verify-email/${verificationToken}`;
-  const mailResult = await sendMail({
-    to: email,
-    subject: 'Verify your MediFlow account',
-    html: `<p>Welcome to MediFlow.</p><p>Verify your account: <a href="${verificationUrl}">Verify email</a></p>`,
-  });
-
+  const mailResult = await sendVerificationOtp(email, otp);
   await writeAudit(req, {
     actorId: userId,
     action: 'REGISTER_PATIENT',
@@ -491,55 +486,81 @@ async function registerPatient(req, res) {
   });
 
   const responseBody = {
-    message: 'User registered successfully. Please verify your email address.',
+    message: 'Account created. Enter the 6-digit code we emailed you to verify your address.',
     user: { user_id: userId, role: 'Patient', status: 'PendingVerification' },
   };
-  // Verification must never dead-end. If the email was NOT actually delivered — either no
-  // provider is configured (skipped) OR a configured provider failed (e.g. bad SMTP creds,
-  // sender not verified, provider still activating) — log the link for the operator AND return
-  // it so the account can still be activated. Once email reliably delivers, this field is
-  // absent and no token is exposed. (Reset stays anti-enumeration and never returns its token.)
+  // Verification must never dead-end. If the email was NOT actually delivered — no provider
+  // configured (skipped) OR a configured provider failed — log the code for the operator AND
+  // return it (demo mode) so the account can still be verified. Once email reliably delivers
+  // this field is absent and the code is never exposed.
   if (mailResult.skipped || mailResult.delivered === false) {
-    console.info(`[email] account-verification link for ${email} (email not delivered): ${verificationUrl}`);
-    responseBody.verificationUrl = verificationUrl;
+    console.info(`[email] verification code for ${email} (email not delivered): ${otp}`);
+    responseBody.devOtp = otp;
   }
 
   res.status(201).json(responseBody);
 }
 
-async function verifyEmail(req, res) {
-  const verificationHash = hashToken(req.params.token);
+// 6-digit numeric email-verification code.
+function generateEmailOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+async function sendVerificationOtp(email, otp) {
+  return sendMail({
+    to: email,
+    subject: 'Your MediFlow verification code',
+    html: `<p>Your MediFlow verification code is <strong>${otp}</strong>.</p><p>It expires in 15 minutes. If you did not sign up, you can ignore this email.</p>`,
+    text: `Your MediFlow verification code is ${otp}. It expires in 15 minutes.`,
+  });
+}
+
+// Verify a registration by 6-digit code (replaces the old click-link flow).
+async function verifyEmailOtp(req, res) {
+  const email = assertEmail(req.body.email);
+  const code = assertString(req.body.code, 'code', { min: 6, max: 6, pattern: /^\d{6}$/ });
   const rows = await query(
     `SELECT user_id FROM users
-     WHERE email_verification_hash = ? AND email_verification_expires_at > NOW() AND status = 'PendingVerification'
+     WHERE email = ? AND email_verification_hash = ? AND email_verification_expires_at > NOW()
+       AND status = 'PendingVerification'
      LIMIT 1`,
-    [verificationHash]
+    [email, hashToken(code)]
   );
   if (!rows[0]) {
-    return res.status(404).send('<h1>Verification Failed</h1><p>The link is invalid or expired.</p>');
+    await writeAudit(req, { action: 'VERIFY_EMAIL', resourceType: 'USER', outcome: 'FAILURE', metadata: { email } });
+    return res.status(400).json({ error: 'That code is incorrect or has expired.' });
   }
-
   await execute(
     `UPDATE users
      SET is_verified = TRUE, status = 'Active', email_verification_hash = NULL, email_verification_expires_at = NULL
      WHERE user_id = ?`,
     [rows[0].user_id]
   );
-  await writeAudit(req, {
-    actorId: rows[0].user_id,
-    action: 'VERIFY_EMAIL',
-    resourceType: 'USER',
-    resourceId: rows[0].user_id,
-    outcome: 'SUCCESS',
-  });
+  await writeAudit(req, { actorId: rows[0].user_id, action: 'VERIFY_EMAIL', resourceType: 'USER', resourceId: rows[0].user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ message: 'Email verified. You can now sign in.' });
+}
 
-  res.send(`
-    <div style="font-family: sans-serif; text-align: center; padding-top: 50px;">
-      <h1 style="color: #4f46e5;">Email Verified Successfully</h1>
-      <p>Your MediFlow account is active.</p>
-      <a href="${config.frontendUrl}/login" style="background: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px; font-weight: bold;">Go to Login</a>
-    </div>
-  `);
+// Reissue a verification code. Anti-enumeration: always 200; abuse is throttled by the route's
+// rate limiter (a short client-side cooldown is enforced by the UI).
+async function resendVerification(req, res) {
+  const email = assertEmail(req.body.email);
+  const user = await getUserByEmail(email);
+  const generic = { message: 'If your account is pending verification, a new code has been sent.' };
+  if (!user || user.status !== 'PendingVerification') {
+    return res.status(200).json(generic);
+  }
+  const otp = generateEmailOtp();
+  await execute(
+    `UPDATE users SET email_verification_hash = ?, email_verification_expires_at = DATE_ADD(NOW(), INTERVAL 15 MINUTE) WHERE user_id = ?`,
+    [hashToken(otp), user.user_id]
+  );
+  const mailResult = await sendVerificationOtp(email, otp);
+  await writeAudit(req, { actorId: user.user_id, action: 'RESEND_VERIFICATION', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
+  if (mailResult.skipped || mailResult.delivered === false) {
+    console.info(`[email] resent verification code for ${email} (email not delivered): ${otp}`);
+    return res.status(200).json({ ...generic, devOtp: otp });
+  }
+  res.status(200).json(generic);
 }
 
 async function login(req, res) {
