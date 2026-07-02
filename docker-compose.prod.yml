@@ -60,6 +60,8 @@ services:
       args:
         # Same-origin: the SPA calls /api, which the frontend nginx proxies to backend.
         VITE_API_URL: /api
+        # Public Cloudflare Turnstile site key (empty => the anti-automation widget is off).
+        VITE_TURNSTILE_SITEKEY: ${VITE_TURNSTILE_SITEKEY:-}
     restart: unless-stopped
     depends_on:
       - backend

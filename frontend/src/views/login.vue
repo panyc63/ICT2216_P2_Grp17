@@ -44,6 +44,8 @@
           >
         </div>
 
+        <TurnstileWidget v-if="!mfaChallengeId" v-model="turnstileToken" />
+
         <button type="submit" class="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl hover:bg-indigo-700 shadow-md transition-all">
           {{ mfaChallengeId ? 'Verify Code' : 'Sign In' }}
         </button>
@@ -90,11 +92,13 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch, cacheSession, dashboardForRole } from '../services/api'
+import TurnstileWidget from '../components/TurnstileWidget.vue'
 
 const router = useRouter()
 const email = ref('')
 const password = ref('')
 const otp = ref('')
+const turnstileToken = ref('')
 const mfaChallengeId = ref('')
 
 const toast = reactive({
@@ -119,7 +123,8 @@ const handleLogin = async () => {
           method: 'POST',
           body: JSON.stringify({
             email: email.value,
-            password: password.value
+            password: password.value,
+            'cf-turnstile-response': turnstileToken.value
           })
         })
 

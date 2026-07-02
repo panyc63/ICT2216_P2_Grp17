@@ -58,6 +58,14 @@ export function getConfig() {
       .split(',')
       .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
       .filter(Boolean),
+    // Cloudflare Turnstile anti-automation. Secret unset => server-side verification is a
+    // no-op (graceful bypass for local/dev/CI), matching the other optional integrations.
+    turnstileSecret: process.env.TURNSTILE_SECRET || '',
+    // WebAuthn / FIDO2 passkeys for privileged accounts. RP ID must be the site's
+    // registrable domain (the effective host), origin the full https origin.
+    webauthnRpId: process.env.WEBAUTHN_RP_ID || 'localhost',
+    webauthnRpName: process.env.WEBAUTHN_RP_NAME || 'MediFlow',
+    webauthnOrigin: process.env.WEBAUTHN_ORIGIN || 'http://localhost:4180',
   };
 
   if (missing.length > 0) {
@@ -353,7 +361,7 @@ export function rateLimit({ windowMs, max, keyPrefix }) {
     current.count += 1;
     if (current.count > max) {
       res.setHeader('Retry-After', Math.ceil((current.resetAt - now) / 1000));
-      return res.status(429).json({ error: 'Too many requests. Please retry later.' });
+      return res.status(429).json({ status: 'error', message: 'Too many requests. Please retry later.' });
     }
 
     return next();
@@ -519,6 +527,9 @@ export function sessionPayload(user, overrides = {}) {
     auth_time: overrides.auth_time || now,
     reauth_at: overrides.reauth_at || now,
     mfa_at: overrides.mfa_at || null,
+    // Bound to the client's User-Agent at issue time (verified in authenticate()). null =>
+    // unbound (e.g. test-minted sessions), which safely skips the UA check.
+    ua_hash: overrides.ua_hash || null,
   };
 }
 
