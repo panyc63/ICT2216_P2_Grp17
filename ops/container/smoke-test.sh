@@ -21,7 +21,8 @@
 # Configurable via env (all have sane defaults):
 #   COMPOSE_FILE  compose file            (default docker-compose.prod.yml)
 #   ENV_FILE      compose --env-file      (default .env.production)
-#   HEALTH_URL    API health check URL    (default https://localhost/api/health)
+#   DOMAIN        public host Caddy serves (default: read from ENV_FILE, else localhost)
+#   HEALTH_URL    API health check URL    (default https://<DOMAIN>/api/health)
 set -euo pipefail
 
 # --- config (env with sensible defaults) ---
@@ -131,14 +132,16 @@ curl -fsSk -o /dev/null --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/"
 echo "  ok: Caddy responded on port 443"
 
 # 3. Frontend nginx serving on 8080. It is only exposed on the compose network (not
-# host-published), so probe it from inside the frontend container. The nginx-unprivileged
-# alpine image ships wget but not curl, so prefer wget and fall back to curl if present.
+# host-published), so probe it from inside the frontend container. Use 127.0.0.1 (NOT
+# localhost): nginx binds IPv4 (listen 8080;), but busybox resolves "localhost" to ::1
+# first, which would be refused. The nginx-unprivileged alpine image ships wget but not
+# curl, so prefer wget and fall back to curl if present.
 echo "[3/4] Checking frontend nginx is serving on container port 8080..."
 if compose exec -T frontend sh -c \
-     'if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null http://localhost:8080/; \
-      elif command -v curl >/dev/null 2>&1; then curl -fsS -o /dev/null http://localhost:8080/; \
+     'if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null http://127.0.0.1:8080/; \
+      elif command -v curl >/dev/null 2>&1; then curl -fsS -o /dev/null http://127.0.0.1:8080/; \
       else echo "no wget/curl in frontend container" >&2; exit 127; fi'; then
-  echo "  ok: nginx served http://localhost:8080/ inside the frontend container"
+  echo "  ok: nginx served http://127.0.0.1:8080/ inside the frontend container"
 else
   fail "frontend nginx did not serve on container port 8080"
 fi
