@@ -48,7 +48,12 @@ export async function apiFetch(path, options = {}) {
   const data = contentType.includes('application/json') ? await response.json() : await response.text();
 
   if (!response.ok) {
-    const message = typeof data === 'object' && data?.error ? data.error : 'Request failed.';
+    // Validation errors use { error }, while anti-automation / rate-limit responses use
+    // { status, message } — surface either so the user sees the real reason, not a generic
+    // "Request failed." A 429 also carries a Retry-After hint.
+    const detail = typeof data === 'object' ? (data.error || data.message) : (typeof data === 'string' ? data : '');
+    let message = detail || 'Request failed.';
+    if (response.status === 429 && !detail) message = 'Too many requests. Please wait a minute and try again.';
     throw new Error(message);
   }
 
