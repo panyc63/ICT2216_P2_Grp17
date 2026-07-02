@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test security.test.js",
+    "test": "node --test security.test.js turnstile.test.js",
     "test:integration": "node --test integration.test.js",
     "audit:prod": "npm audit --omit=dev"
   },

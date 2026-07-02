@@ -1,0 +1,70 @@
+name: Commit Message Policy
+
+# Enforce Conventional Commits on every commit contained in a pull request.
+# Keeps history machine-readable (changelogs, semantic versioning) and makes
+# review intent explicit.
+#
+# Implemented as a small, self-contained inline Node step (no external config
+# file required) that checks each commit subject against a Conventional Commits
+# regex: type(optional-scope)!: subject.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commit-message-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conventional-commits:
+    name: Lint PR commit messages (Conventional Commits)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so we can enumerate every commit in the PR range.
+          fetch-depth: 0
+      - name: Validate commit messages
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { execSync } from 'node:child_process';
+
+          const base = process.env.BASE_SHA;
+          const head = process.env.HEAD_SHA;
+
+          // First line of each commit in base..head, NUL-separated to be safe.
+          const raw = execSync(
+            `git log --no-merges --format=%s%x00 ${base}..${head}`,
+            { encoding: 'utf8' }
+          );
+          const subjects = raw.split('\0').map((s) => s.trim()).filter(Boolean);
+
+          // Conventional Commits: type(scope)!: subject
+          // Allowed types per @commitlint/config-conventional.
+          const types = [
+            'build', 'chore', 'ci', 'docs', 'feat', 'fix',
+            'perf', 'refactor', 'revert', 'style', 'test',
+          ];
+          const re = new RegExp(
+            `^(${types.join('|')})(\\([a-z0-9._/-]+\\))?(!)?: .+`,
+            'i'
+          );
+
+          const bad = subjects.filter((s) => !re.test(s));
+
+          if (bad.length > 0) {
+            console.error('Commit messages must follow Conventional Commits (type(scope): subject).');
+            console.error(`Allowed types: ${types.join(', ')}`);
+            console.error('Offending commits:');
+            for (const s of bad) console.error(`  - ${s}`);
+            process.exit(1);
+          }
+          console.log(`All ${subjects.length} commit message(s) follow Conventional Commits.`);
+          EOF

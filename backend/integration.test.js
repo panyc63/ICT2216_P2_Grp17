@@ -13,7 +13,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import mysql from 'mysql2/promise';
-import { signJwt, sessionPayload, hashToken } from './security.js';
+import { signJwt, sessionPayload, hashToken, sha256 } from './security.js';
 import { runCleanup } from './cleanup.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
@@ -142,9 +142,11 @@ test('owner can read their own payment; another patient cannot (object-level aut
 });
 
 // --- Rate limiting --------------------------------------------------------
-test('login endpoint rate-limits brute force with 429', async () => {
+test('login endpoint rate-limits brute force with 429 and the standardized JSON shape', async () => {
   const csrf = await getCsrf();
   const statuses = [];
+  let throttledBody = null;
+  let retryAfter = null;
   for (let i = 0; i < 10; i += 1) {
     const res = await api('/api/login', {
       method: 'POST',
@@ -152,8 +154,34 @@ test('login endpoint rate-limits brute force with 429', async () => {
       body: { email: `nobody${Date.now()}@example.com`, password: 'wrong-password' },
     });
     statuses.push(res.status);
+    if (res.status === 429) {
+      throttledBody = await res.json();
+      retryAfter = res.headers.get('retry-after');
+    }
   }
+  // Crypto tier is 5 / 15 min, so 10 rapid attempts must trip the limiter.
   assert.ok(statuses.includes(429), `expected a 429 in ${JSON.stringify(statuses)}`);
+  // Standardized graceful 429 payload + Retry-After header.
+  assert.deepEqual(throttledBody, { status: 'error', message: 'Too many requests. Please retry later.' });
+  assert.ok(Number(retryAfter) > 0, 'expected a positive Retry-After header');
+});
+
+test('session is bound to the User-Agent: same UA is accepted, a different UA is rejected (401)', async () => {
+  const ua = 'Mozilla/5.0 (E2E Original Browser)';
+  const token = signJwt(sessionPayload(SEED_DOCTOR, { ua_hash: sha256(ua) }), JWT_SECRET);
+  const same = await fetch(`${BASE_URL}/api/me`, { headers: { Cookie: `mf_session=${token}`, 'User-Agent': ua } });
+  assert.equal(same.status, 200);
+  const different = await fetch(`${BASE_URL}/api/me`, { headers: { Cookie: `mf_session=${token}`, 'User-Agent': 'AttackerAgent/9.9' } });
+  assert.equal(different.status, 401);
+});
+
+test('session past the 8h absolute lifetime is rejected even with a live access token', async () => {
+  const ua = 'Mozilla/5.0 (E2E Original Browser)';
+  const nineHoursAgo = Math.floor(Date.now() / 1000) - 9 * 60 * 60;
+  // Fresh token (exp = now + 15 min) but auth_time is 9h old -> absolute cap must reject it.
+  const token = signJwt(sessionPayload(SEED_DOCTOR, { auth_time: nineHoursAgo, ua_hash: sha256(ua) }), JWT_SECRET);
+  const res = await fetch(`${BASE_URL}/api/me`, { headers: { Cookie: `mf_session=${token}`, 'User-Agent': ua } });
+  assert.equal(res.status, 401);
 });
 
 // --- Secure payment verification (Stripe webhook signature) ---------------

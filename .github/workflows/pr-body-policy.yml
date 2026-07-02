@@ -1,0 +1,30 @@
+name: PR Body Policy
+
+# Ensure every pull-request description contains the three governance sections
+# required by the PR template (## Description, ## Testing Completed,
+# ## Security Impact), each with real content. Enforced by a Node validator.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-body-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-body:
+    name: Validate PR description sections
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+      - name: Validate PR body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node ops/security/validate-pr-body.mjs

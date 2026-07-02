@@ -58,12 +58,17 @@ import {
   verifyPassword,
 } from './security.js';
 import { scheduleCleanup } from './cleanup.js';
+import { verifyTurnstile } from './turnstile.js';
 
 dotenv.config();
 
 const config = getConfig();
 const app = express();
-app.set('trust proxy', 1);
+// Two trusted proxy hops in production: Caddy (edge, sets X-Forwarded-For to the real
+// client) -> frontend nginx -> backend. Trusting 2 hops makes req.ip resolve to the real
+// client instead of an internal container IP, so per-IP rate limiting keys on the actual
+// caller. (nginx's real_ip config does the equivalent for its own limit_req — see nginx.conf.)
+app.set('trust proxy', 2);
 
 const db = mysql.createPool({
   host: process.env.DB_HOST,
@@ -87,9 +92,18 @@ const transporter = config.resendApiKey
     })
   : null;
 
-const authLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, keyPrefix: 'auth' });
-const loginLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 8, keyPrefix: 'login' });
-const triageLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'triage' });
+// Compute-cost-aware rate limiting: each budget maps to how expensive the route is.
+// Now that req.ip resolves to the real client (trust proxy = 2), per-IP keying is meaningful.
+// Tier 1 — cryptographically expensive auth (scrypt hashing, JWT/MFA): 5 requests / 15 min.
+const cryptoLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, keyPrefix: 'crypto-auth' });
+const registerLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, keyPrefix: 'crypto-register' });
+const resetLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, keyPrefix: 'crypto-reset' });
+// Tier 2 — DB-intensive clinical write paths (triage, prescriptions): 15 requests / min.
+const clinicalWriteLimit = rateLimit({ windowMs: 60 * 1000, max: 15, keyPrefix: 'clinical' });
+// Tier 3 — standard authenticated read paths: a lenient 100 requests / min.
+const standardReadLimit = rateLimit({ windowMs: 60 * 1000, max: 100, keyPrefix: 'read' });
+// Cheap token-lookup GET (email verification link): kept lenient, separate from the crypto tier.
+const tokenLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, keyPrefix: 'token' });
 const chatLimit = rateLimit({ windowMs: 60 * 1000, max: 30, keyPrefix: 'chat' });
 const paymentLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'payment' });
 const verificationLimit = rateLimit({ windowMs: 60 * 1000, max: 20, keyPrefix: 'mc-verify' });
@@ -126,21 +140,21 @@ app.get('/api/csrf', (req, res) => {
 
 app.use(csrfGuard(config));
 
-app.post('/api/register', authLimit, asyncHandler(registerPatient));
-app.get('/api/verify-email/:token', authLimit, asyncHandler(verifyEmail));
-app.post('/api/login', loginLimit, asyncHandler(login));
-app.post('/api/login/mfa', loginLimit, asyncHandler(completeLoginMfa));
+app.post('/api/register', registerLimit, asyncHandler(requireTurnstile), asyncHandler(registerPatient));
+app.get('/api/verify-email/:token', tokenLimit, asyncHandler(verifyEmail));
+app.post('/api/login', cryptoLimit, asyncHandler(requireTurnstile), asyncHandler(login));
+app.post('/api/login/mfa', cryptoLimit, asyncHandler(completeLoginMfa));
 app.post('/api/logout', asyncHandler(authenticate), asyncHandler(logout));
 app.get('/api/me', asyncHandler(authenticate), asyncHandler(me));
-app.post('/api/auth/reauth', loginLimit, asyncHandler(authenticate), asyncHandler(reauthenticate));
+app.post('/api/auth/reauth', cryptoLimit, asyncHandler(authenticate), asyncHandler(reauthenticate));
 
 // Account self-service (Deliverable 1: Account Management - Read/Update/Delete)
 app.get('/api/me/profile', asyncHandler(authenticate), asyncHandler(getMyProfile));
 app.patch('/api/me/profile', asyncHandler(authenticate), asyncHandler(updateMyProfile));
 app.post('/api/me/password', asyncHandler(authenticate), requireRecentReauth, asyncHandler(changeMyPassword));
 app.delete('/api/me', asyncHandler(authenticate), requireRecentReauth, asyncHandler(deleteMyAccount));
-app.post('/api/forgot-password', authLimit, asyncHandler(requestPasswordReset));
-app.post('/api/reset-password', authLimit, asyncHandler(resetPassword));
+app.post('/api/forgot-password', resetLimit, asyncHandler(requestPasswordReset));
+app.post('/api/reset-password', resetLimit, asyncHandler(resetPassword));
 
 app.get('/api/staff', asyncHandler(authenticate), requireRole('Admin'), asyncHandler(listStaff));
 app.post('/api/staff', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(createStaff));
@@ -155,7 +169,7 @@ app.post('/api/consultations', asyncHandler(authenticate), requireRole('Patient'
 app.get('/api/consultations', asyncHandler(authenticate), asyncHandler(listConsultations));
 app.patch('/api/consultations/:id', asyncHandler(authenticate), requireRole('Doctor', 'Nurse', 'Admin'), asyncHandler(updateConsultation));
 
-app.post('/api/triage', triageLimit, asyncHandler(authenticate), requireRole('Patient'), asyncHandler(submitTriage));
+app.post('/api/triage', asyncHandler(authenticate), requireRole('Patient'), clinicalWriteLimit, asyncHandler(requireTurnstile), asyncHandler(submitTriage));
 app.get('/api/nurse/queue', asyncHandler(authenticate), requireRole('Nurse', 'Doctor', 'Admin'), asyncHandler(listQueue));
 app.patch('/api/nurse/queue/:id', asyncHandler(authenticate), requireRole('Nurse', 'Admin'), asyncHandler(updateQueue));
 
@@ -290,8 +304,11 @@ function publicUser(user) {
   };
 }
 
-function issueSession(res, user, overrides = {}) {
-  const token = signJwt(sessionPayload(user, overrides), config.jwtSecret);
+function issueSession(req, res, user, overrides = {}) {
+  // Bind the session to the caller's User-Agent so a stolen token replayed from a different
+  // client is rejected (see authenticate()).
+  const uaHash = sha256(req.get('user-agent') || '');
+  const token = signJwt(sessionPayload(user, { ...overrides, ua_hash: uaHash }), config.jwtSecret);
   setSessionCookie(res, token, config);
   return {
     user: publicUser(user),
@@ -317,6 +334,20 @@ async function authenticate(req, res, next) {
     return res.status(401).json({ error: 'Session revoked.' });
   }
 
+  // Absolute session lifetime: even a valid, unexpired access token cannot keep a session
+  // alive beyond 8 hours from the initial authentication.
+  if (payload.auth_time && currentUnixSeconds() - Number(payload.auth_time) > 8 * 60 * 60) {
+    clearSessionCookie(res, config);
+    return res.status(401).json({ error: 'Session expired. Please sign in again.' });
+  }
+  // User-Agent binding: a sudden UA change is a strong session-theft signal, so destroy the
+  // session. IP is recorded for audit but deliberately NOT hard-bound, so normal mobile
+  // network switches (5G<->WiFi) never log a user out.
+  if (payload.ua_hash && sha256(req.get('user-agent') || '') !== payload.ua_hash) {
+    clearSessionCookie(res, config);
+    return res.status(401).json({ error: 'Session security check failed. Please sign in again.' });
+  }
+
   req.user = {
     ...publicUser(user),
     token_version: user.token_version || 0,
@@ -334,6 +365,19 @@ function requireRole(...roles) {
     }
     next();
   };
+}
+
+// Anti-automation gate for unauthenticated / abuse-prone entry paths. Validates the
+// Cloudflare Turnstile token BEFORE any database work. No-op when TURNSTILE_SECRET is
+// unset (local/dev/CI), so it never blocks non-production runs. Declared as a function so
+// it is hoisted for the route table above; wrap with asyncHandler at the call site.
+async function requireTurnstile(req, res, next) {
+  const token = req.body?.['cf-turnstile-response'] || req.get('cf-turnstile-response') || '';
+  const result = await verifyTurnstile(token, config.turnstileSecret, req.ip);
+  if (!result.success) {
+    return res.status(403).json({ status: 'error', message: 'Human verification failed. Please complete the challenge and try again.' });
+  }
+  next();
 }
 
 function requireRecentReauth(req, res, next) {
@@ -464,7 +508,7 @@ async function login(req, res) {
 
   await execute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE user_id = ?', [user.user_id]);
   await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
-  res.status(200).json({ message: 'Login successful.', ...issueSession(res, user) });
+  res.status(200).json({ message: 'Login successful.', ...issueSession(req, res, user) });
 }
 
 async function createMfaChallenge(user, subject) {
@@ -505,7 +549,7 @@ async function completeLoginMfa(req, res) {
   );
   await writeAudit(req, { actorId: user.user_id, action: 'LOGIN_MFA', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
   const now = currentUnixSeconds();
-  res.status(200).json({ message: 'Login successful.', ...issueSession(res, user, { mfa_at: now, reauth_at: now }) });
+  res.status(200).json({ message: 'Login successful.', ...issueSession(req, res, user, { mfa_at: now, reauth_at: now }) });
 }
 
 async function logout(req, res) {
@@ -550,7 +594,7 @@ async function reauthenticate(req, res) {
   const now = currentUnixSeconds();
   await execute('UPDATE users SET mfa_challenge_id = NULL, mfa_otp_hash = NULL, mfa_expires_at = NULL WHERE user_id = ?', [user.user_id]);
   await writeAudit(req, { actorId: user.user_id, action: 'REAUTH', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
-  res.status(200).json({ message: 'Re-authentication successful.', ...issueSession(res, user, { reauth_at: now, mfa_at: now }) });
+  res.status(200).json({ message: 'Re-authentication successful.', ...issueSession(req, res, user, { reauth_at: now, mfa_at: now }) });
 }
 
 async function getMyProfile(req, res) {

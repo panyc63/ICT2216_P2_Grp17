@@ -70,4 +70,15 @@ export default [
       globals: { ...globals.node },
     },
   },
+
+  // Ops security/governance scripts (Node ESM modules) run under Node and use
+  // Node globals (process, etc.). Mirrors the Node-context block above.
+  {
+    files: ['ops/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+  },
 ];

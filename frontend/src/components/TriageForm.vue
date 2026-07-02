@@ -38,6 +38,8 @@
       />
     </div>
 
+    <TurnstileWidget v-model="turnstileToken" />
+
     <div class="flex items-center gap-4 pt-2">
       <button
         type="submit"
@@ -63,6 +65,7 @@
 import { reactive, ref } from 'vue'
 import { patientStore } from '../store/patientStore'
 import { apiFetch } from '../services/api'
+import TurnstileWidget from './TurnstileWidget.vue'
 
 // Booking always starts here: submitting the questionnaire runs triage, which opens
 // the linked, prioritized consultation. The parent listens for `submitted`.
@@ -88,6 +91,7 @@ const answers = reactive({
 
 const submitting = ref(false)
 const error = ref('')
+const turnstileToken = ref('')
 
 const submitAnswers = async () => {
   error.value = ''
@@ -95,7 +99,7 @@ const submitAnswers = async () => {
   try {
     const result = await apiFetch('/triage', {
       method: 'POST',
-      body: JSON.stringify({ ...answers })
+      body: JSON.stringify({ ...answers, 'cf-turnstile-response': turnstileToken.value })
     })
     patientStore.questionnaire.answers = { ...answers }
     patientStore.questionnaire.submitted = true
