@@ -21,12 +21,12 @@
         <div class="mb-8 text-center">
           <h1 class="text-2xl font-extrabold text-slate-900 tracking-tight mb-1.5">Welcome back</h1>
           <p class="text-sm text-slate-500">
-            {{ mfaChallengeId ? 'Enter the verification code to finish signing in.' : 'Sign in to your MediFlow account.' }}
+            {{ challengeActive ? 'Enter the verification code to finish signing in.' : 'Sign in to your MediFlow account.' }}
           </p>
         </div>
 
         <form @submit.prevent="handleLogin" class="space-y-5">
-          <template v-if="!mfaChallengeId">
+          <template v-if="!challengeActive">
             <div class="flex flex-col gap-2">
               <label class="text-sm font-semibold text-slate-900" for="email">Email</label>
               <input
@@ -61,8 +61,9 @@
 
           <div v-else class="space-y-4">
             <div class="flex items-start gap-3 text-sm text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3" role="status" aria-live="polite">
-              <span aria-hidden="true">📧</span>
-              <span>We sent a 6-digit verification code to your email. It expires in 5 minutes.</span>
+              <span aria-hidden="true">{{ totpChallengeId ? '🔐' : '📧' }}</span>
+              <span v-if="totpChallengeId">Open your authenticator app and enter the current 6-digit code.</span>
+              <span v-else>We sent a 6-digit verification code to your email. It expires in 5 minutes.</span>
             </div>
             <div class="flex flex-col gap-2">
               <label class="text-sm font-semibold text-slate-900" for="otp">Verification code</label>
@@ -80,10 +81,10 @@
             </div>
           </div>
 
-          <TurnstileWidget v-if="!mfaChallengeId" v-model="turnstileToken" />
+          <TurnstileWidget v-if="!challengeActive" v-model="turnstileToken" />
 
           <button type="submit" class="w-full bg-indigo-600 text-white font-semibold py-3.5 rounded-xl shadow-sm hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-200 transition-all">
-            {{ mfaChallengeId ? 'Verify code' : 'Sign in' }}
+            {{ challengeActive ? 'Verify code' : 'Sign in' }}
           </button>
         </form>
 
@@ -131,7 +132,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch, cacheSession, dashboardForRole } from '../services/api'
 import TurnstileWidget from '../components/TurnstileWidget.vue'
@@ -142,6 +143,9 @@ const password = ref('')
 const otp = ref('')
 const turnstileToken = ref('')
 const mfaChallengeId = ref('')
+const totpChallengeId = ref('')
+// True once the password step has passed and a second factor (email OTP or authenticator) is due.
+const challengeActive = computed(() => Boolean(mfaChallengeId.value || totpChallengeId.value))
 
 const toast = reactive({
   show: false,
@@ -152,33 +156,37 @@ const toast = reactive({
 
 const handleLogin = async () => {
   try {
-    const data = mfaChallengeId.value
-      ? await apiFetch('/login/mfa', {
-          method: 'POST',
-          body: JSON.stringify({
-            email: email.value,
-            challengeId: mfaChallengeId.value,
-            otp: otp.value
-          })
+    let data
+    if (totpChallengeId.value) {
+      data = await apiFetch('/login/totp', {
+        method: 'POST',
+        body: JSON.stringify({ email: email.value, challengeId: totpChallengeId.value, code: otp.value })
+      })
+    } else if (mfaChallengeId.value) {
+      data = await apiFetch('/login/mfa', {
+        method: 'POST',
+        body: JSON.stringify({ email: email.value, challengeId: mfaChallengeId.value, otp: otp.value })
+      })
+    } else {
+      data = await apiFetch('/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: email.value,
+          password: password.value,
+          'cf-turnstile-response': turnstileToken.value
         })
-      : await apiFetch('/login', {
-          method: 'POST',
-          body: JSON.stringify({
-            email: email.value,
-            password: password.value,
-            'cf-turnstile-response': turnstileToken.value
-          })
-        })
+      })
+    }
 
-    if (data.requiresMfa) {
-      mfaChallengeId.value = data.challengeId
+    if (data.requiresTotp || data.requiresMfa) {
+      if (data.requiresTotp) totpChallengeId.value = data.challengeId
+      else mfaChallengeId.value = data.challengeId
+      otp.value = ''
       toast.title = 'Verification Required'
-      toast.message = data.message || 'Enter the verification code sent to your email.'
+      toast.message = data.message || 'Enter your verification code to finish signing in.'
       toast.isError = false
       toast.show = true
-      setTimeout(() => {
-        toast.show = false
-      }, 3000)
+      setTimeout(() => { toast.show = false }, 3000)
       return
     }
 

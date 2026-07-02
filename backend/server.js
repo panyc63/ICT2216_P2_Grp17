@@ -163,6 +163,7 @@ app.post('/api/verify-email', tokenLimit, asyncHandler(verifyEmailOtp));
 app.post('/api/verify-email/resend', resetLimit, asyncHandler(resendVerification));
 app.post('/api/login', cryptoLimit, asyncHandler(requireTurnstile), asyncHandler(login));
 app.post('/api/login/mfa', cryptoLimit, asyncHandler(completeLoginMfa));
+app.post('/api/login/totp', cryptoLimit, asyncHandler(completeLoginTotp));
 app.post('/api/logout', asyncHandler(authenticate), asyncHandler(logout));
 app.get('/api/me', asyncHandler(authenticate), asyncHandler(me));
 app.post('/api/auth/reauth', cryptoLimit, asyncHandler(authenticate), asyncHandler(reauthenticate));
@@ -615,6 +616,21 @@ async function login(req, res) {
     return res.status(403).json({ error: 'Please verify your email address before signing in.' });
   }
 
+  // Second factor. Prefer an enrolled authenticator app (TOTP — offline, phishing-resistant, no
+  // email dependency); otherwise fall back to email-OTP MFA when the role requires it. A random
+  // challengeId (stored with a 5-min expiry) proves the password step passed without re-sending
+  // the password to the TOTP step.
+  if (user.totp_enabled) {
+    const challengeId = randomToken(16);
+    await execute('UPDATE users SET mfa_challenge_id = ?, mfa_otp_hash = NULL, mfa_expires_at = DATE_ADD(NOW(), INTERVAL 5 MINUTE) WHERE user_id = ?', [challengeId, user.user_id]);
+    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN_TOTP_CHALLENGE', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
+    return res.status(202).json({
+      requiresTotp: true,
+      challengeId,
+      message: 'Enter the 6-digit code from your authenticator app.',
+    });
+  }
+
   if (config.mfaRequiredRoles.includes(user.role)) {
     const challenge = await createMfaChallenge(user, 'Login verification');
     await writeAudit(req, { actorId: user.user_id, action: 'LOGIN_MFA_CHALLENGE', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
@@ -628,6 +644,32 @@ async function login(req, res) {
   await execute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE user_id = ?', [user.user_id]);
   await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
   res.status(200).json({ message: 'Login successful.', ...issueSession(req, res, user) });
+}
+
+// Second step of a TOTP-protected login: verify the authenticator code against the challenge
+// created by login() (which required a correct password first).
+async function completeLoginTotp(req, res) {
+  const email = assertEmail(req.body.email);
+  const challengeId = assertString(req.body.challengeId, 'challengeId', { min: 10, max: 128 });
+  const code = assertString(req.body.code, 'code', { min: 6, max: 6, pattern: /^\d{6}$/ });
+  const user = await getUserByEmail(email);
+  if (!user || !user.totp_enabled || user.mfa_challenge_id !== challengeId) {
+    await writeAudit(req, { action: 'LOGIN_TOTP', resourceType: 'USER', outcome: 'FAILURE', metadata: { email } });
+    return res.status(401).json({ error: 'Invalid authenticator code.' });
+  }
+  const rows = await query('SELECT mfa_expires_at > NOW() AS valid, totp_secret_encrypted FROM users WHERE user_id = ?', [user.user_id]);
+  if (!rows[0]?.valid) {
+    return res.status(401).json({ error: 'This sign-in attempt expired. Please start again.' });
+  }
+  const secret = decryptText(rows[0].totp_secret_encrypted, config);
+  if (!secret || !verifyTotp(code, secret)) {
+    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN_TOTP', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE' });
+    return res.status(401).json({ error: 'Invalid authenticator code.' });
+  }
+  await execute('UPDATE users SET mfa_challenge_id = NULL, mfa_expires_at = NULL, last_login = CURRENT_TIMESTAMP WHERE user_id = ?', [user.user_id]);
+  await writeAudit(req, { actorId: user.user_id, action: 'LOGIN_TOTP', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
+  const now = currentUnixSeconds();
+  res.status(200).json({ message: 'Login successful.', ...issueSession(req, res, user, { mfa_at: now, reauth_at: now }) });
 }
 
 async function createMfaChallenge(user, subject) {
