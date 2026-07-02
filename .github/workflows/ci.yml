@@ -28,6 +28,7 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: node ops/security/verify-pipeline-integrity.mjs
 
   backend-test:
     name: Backend unit tests

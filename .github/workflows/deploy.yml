@@ -47,3 +47,4 @@ jobs:
             git pull --ff-only
             docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
             docker image prune -f
+            bash ops/container/smoke-test.sh

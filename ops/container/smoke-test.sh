@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Post-deploy smoke test for the MediFlow production stack.
+#
+# Runs ON the production VM in the repo directory immediately after
+# `docker compose ... up -d --build` (see .github/workflows/deploy.yml). It fails fast
+# and non-zero on the first broken check so a bad deploy trips the SSH step (and the whole
+# Deploy workflow) instead of silently shipping a half-up stack.
+#
+# Checks, in order:
+#   1. Required containers (db, backend, frontend, caddy) are running AND healthy.
+#      clamav is OPTIONAL — a warning, never a failure (the backend fails uploads closed
+#      until its ~1 GB signature DB finishes loading, which is fine at deploy time).
+#   2. Caddy is answering on the published host ports 80 and 443.
+#   3. The frontend nginx is serving on its container port 8080 (not host-published, so
+#      it is probed from inside the frontend container).
+#   4. The API health endpoint returns 200 through the real Caddy -> nginx -> backend path.
+#
+# Usage on the VM:
+#   bash ops/container/smoke-test.sh
+#
+# Configurable via env (all have sane defaults):
+#   COMPOSE_FILE  compose file            (default docker-compose.prod.yml)
+#   ENV_FILE      compose --env-file      (default .env.production)
+#   HEALTH_URL    API health check URL    (default https://localhost/api/health)
+set -euo pipefail
+
+# --- config (env with sensible defaults) ---
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+ENV_FILE="${ENV_FILE:-.env.production}"
+HEALTH_URL="${HEALTH_URL:-https://localhost/api/health}"
+
+# Services that MUST be up + healthy for the deploy to count as good.
+REQUIRED_SERVICES=(db backend frontend caddy)
+# Services that are nice-to-have; missing/unhealthy only warns.
+OPTIONAL_SERVICES=(clamav)
+
+command -v docker >/dev/null || { echo "FAIL: docker is required"; exit 1; }
+command -v curl   >/dev/null || { echo "FAIL: curl is required"; exit 1; }
+
+compose() {
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
+fail() {
+  echo "SMOKE TEST FAILED: $*" >&2
+  exit 1
+}
+
+# Resolve the container id backing a compose service (empty string if the service has no
+# container at all — e.g. it was never started or was scaled to zero).
+container_id() {
+  compose ps -q "$1" 2>/dev/null | head -n 1
+}
+
+# Report a container's health: prints "healthy", "unhealthy", "starting", "none" (no
+# healthcheck defined but running), or "missing" (no container / not running).
+container_state() {
+  local service="$1" cid status health
+  cid="$(container_id "$service")"
+  [ -n "$cid" ] || { echo "missing"; return; }
+  # Running state first: a stopped/restarting container is never "healthy".
+  status="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || echo unknown)"
+  [ "$status" = "running" ] || { echo "missing"; return; }
+  # .State.Health is absent when the image declares no HEALTHCHECK; treat running-with-no-
+  # healthcheck as "none" (acceptable) rather than a failure.
+  health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo none)"
+  echo "$health"
+}
+
+echo "== MediFlow post-deploy smoke test =="
+echo "compose file: ${COMPOSE_FILE}  env file: ${ENV_FILE}"
+echo
+
+# 1. Required containers running + healthy.
+echo "[1/4] Checking required containers are running and healthy..."
+for service in "${REQUIRED_SERVICES[@]}"; do
+  state="$(container_state "$service")"
+  case "$state" in
+    healthy|none)
+      echo "  ok: ${service} (${state})"
+      ;;
+    missing)
+      fail "required service '${service}' is not running (state: ${state})"
+      ;;
+    *)
+      # starting / unhealthy / unknown — not good enough for a passed deploy.
+      fail "required service '${service}' is not healthy (state: ${state})"
+      ;;
+  esac
+done
+
+# 1b. Optional containers — warn only, never fail.
+for service in "${OPTIONAL_SERVICES[@]}"; do
+  state="$(container_state "$service")"
+  case "$state" in
+    healthy|none) echo "  ok: ${service} (${state}, optional)" ;;
+    *)            echo "  WARN: optional service '${service}' is ${state} (uploads fail closed until it is ready)" ;;
+  esac
+done
+
+# 2. Caddy answering on the published host ports 80 and 443.
+echo "[2/4] Checking Caddy is listening on host ports 80 and 443..."
+# Port 80 typically 308-redirects to HTTPS; -f would treat 3xx as success anyway, and we
+# only care that Caddy answers, so a bare connect + response is enough.
+curl -fsS -o /dev/null "http://localhost:80/" \
+  || fail "Caddy did not respond on http://localhost:80"
+echo "  ok: Caddy responded on port 80"
+# -k: the localhost cert is Caddy's internal CA (or an ACME cert for a non-localhost DOMAIN),
+# so skip trust verification here — we are asserting reachability, not the cert chain.
+curl -fsSk -o /dev/null "https://localhost:443/" \
+  || fail "Caddy did not respond on https://localhost:443"
+echo "  ok: Caddy responded on port 443"
+
+# 3. Frontend nginx serving on 8080. It is only exposed on the compose network (not
+# host-published), so probe it from inside the frontend container. The nginx-unprivileged
+# alpine image ships wget but not curl, so prefer wget and fall back to curl if present.
+echo "[3/4] Checking frontend nginx is serving on container port 8080..."
+if compose exec -T frontend sh -c \
+     'if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null http://localhost:8080/; \
+      elif command -v curl >/dev/null 2>&1; then curl -fsS -o /dev/null http://localhost:8080/; \
+      else echo "no wget/curl in frontend container" >&2; exit 127; fi'; then
+  echo "  ok: nginx served http://localhost:8080/ inside the frontend container"
+else
+  fail "frontend nginx did not serve on container port 8080"
+fi
+
+# 4. API health endpoint through the full Caddy -> nginx -> backend path.
+# Backend defines GET /api/health -> 200 {"status":"ok"} (backend/server.js).
+echo "[4/4] Checking API health at ${HEALTH_URL}..."
+health_body="$(curl -fsSk "$HEALTH_URL")" \
+  || fail "health check did not return HTTP 200 from ${HEALTH_URL}"
+case "$health_body" in
+  *'"status":"ok"'*|*'"status": "ok"'*)
+    echo "  ok: health endpoint returned {\"status\":\"ok\"}"
+    ;;
+  *)
+    fail "health endpoint returned 200 but unexpected body: ${health_body}"
+    ;;
+esac
+
+echo
+echo "SMOKE TEST PASSED"

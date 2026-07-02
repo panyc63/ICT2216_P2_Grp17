@@ -1,0 +1,43 @@
+# actions/labeler@v5 configuration.
+# Maps changed file paths to labels. Schema:
+#   <label>:
+#     - changed-files:
+#         - any-glob-to-any-file: [ <globs> ]
+
+backend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/**'
+
+frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'frontend/**'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - '.github/workflows/**/*.yml'
+          - '.github/workflows/**/*.yaml'
+
+ops:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'ops/**'
+
+database:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'setup.sql'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'e2e/**'
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - '**/*.md'
