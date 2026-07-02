@@ -1,53 +1,70 @@
 <template>
   <div>
     <div class="mb-6">
-      <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Medical Certificate</h1>
-      <p class="text-sm text-slate-500">View and download your medical certificate as a PDF.</p>
+      <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Your medical certificate</h1>
+      <p class="text-sm text-slate-500 mt-1">View your certificate and save a copy as a PDF.</p>
     </div>
 
-    <div v-if="!mc" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-10 text-center text-slate-400 max-w-2xl">
-      No medical certificate has been issued to you yet.
+    <!-- Loading -->
+    <div v-if="loading" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-8 max-w-2xl text-sm text-slate-400">
+      Loading your certificate…
     </div>
 
-    <div v-else class="bg-white border border-slate-200 rounded-2xl shadow-sm p-8 max-w-2xl">
-      <div class="text-center border-b border-slate-200 pb-4 mb-6">
-        <p class="text-lg font-extrabold tracking-tight text-indigo-600">MediFlow Clinic</p>
-        <p class="text-xs text-slate-400">Medical Certificate</p>
+    <!-- Empty -->
+    <div v-else-if="!mc" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-10 text-center max-w-2xl">
+      <div class="w-14 h-14 mx-auto rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-2xl" aria-hidden="true">📄</div>
+      <h2 class="mt-4 font-bold text-slate-900">No certificate yet</h2>
+      <p class="mt-1.5 text-sm text-slate-500 max-w-md mx-auto">
+        If a doctor issues you a medical certificate during a consultation, you'll be able to view and download it here.
+      </p>
+    </div>
+
+    <!-- Certificate -->
+    <div v-else class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden max-w-2xl">
+      <div class="bg-brand-gradient px-8 py-6 text-white text-center">
+        <p class="text-lg font-extrabold tracking-tight">MediFlow Clinic</p>
+        <p class="text-xs text-indigo-100 mt-0.5">Medical Certificate</p>
       </div>
 
-      <dl class="divide-y divide-slate-100">
-        <div class="py-3 flex justify-between gap-4">
-          <dt class="text-sm font-semibold text-slate-500">Patient Name</dt>
-          <dd class="text-sm font-medium text-slate-900 text-right">{{ mc.patientName }}</dd>
-        </div>
-        <div class="py-3 flex justify-between gap-4">
-          <dt class="text-sm font-semibold text-slate-500">Diagnosis</dt>
-          <dd class="text-sm font-medium text-slate-900 text-right">{{ mc.diagnosis }}</dd>
-        </div>
-        <div class="py-3 flex justify-between gap-4">
-          <dt class="text-sm font-semibold text-slate-500">Date of Issue</dt>
-          <dd class="text-sm font-medium text-slate-900 text-right">{{ mc.issueDate }}</dd>
-        </div>
-        <div class="py-3 flex justify-between gap-4">
-          <dt class="text-sm font-semibold text-slate-500">Valid From</dt>
-          <dd class="text-sm font-medium text-slate-900 text-right">{{ mc.validFrom }}</dd>
-        </div>
-        <div class="py-3 flex justify-between gap-4">
-          <dt class="text-sm font-semibold text-slate-500">Valid To</dt>
-          <dd class="text-sm font-medium text-slate-900 text-right">{{ mc.validTo }}</dd>
-        </div>
-        <div class="py-3 flex justify-between gap-4">
-          <dt class="text-sm font-semibold text-slate-500">Attending Doctor</dt>
-          <dd class="text-sm font-medium text-slate-900 text-right">{{ mc.doctor }}</dd>
-        </div>
-      </dl>
+      <div class="p-8">
+        <p class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-full px-3 py-1 mb-5">
+          <span aria-hidden="true">🔏</span> Digitally signed by your doctor
+        </p>
 
-      <button
-        @click="downloadPdf"
-        class="mt-8 w-full py-3 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700"
-      >
-        Download PDF
-      </button>
+        <dl class="divide-y divide-slate-100">
+          <div class="py-3 flex justify-between gap-4">
+            <dt class="text-sm font-semibold text-slate-500">Patient name</dt>
+            <dd class="text-sm font-semibold text-slate-900 text-right">{{ mc.patientName }}</dd>
+          </div>
+          <div class="py-3 flex justify-between gap-4">
+            <dt class="text-sm font-semibold text-slate-500">Diagnosis</dt>
+            <dd class="text-sm font-semibold text-slate-900 text-right">{{ mc.diagnosis }}</dd>
+          </div>
+          <div class="py-3 flex justify-between gap-4">
+            <dt class="text-sm font-semibold text-slate-500">Date of issue</dt>
+            <dd class="text-sm font-semibold text-slate-900 text-right">{{ mc.issueDate }}</dd>
+          </div>
+          <div class="py-3 flex justify-between gap-4">
+            <dt class="text-sm font-semibold text-slate-500">Valid from</dt>
+            <dd class="text-sm font-semibold text-slate-900 text-right">{{ mc.validFrom }}</dd>
+          </div>
+          <div class="py-3 flex justify-between gap-4">
+            <dt class="text-sm font-semibold text-slate-500">Valid to</dt>
+            <dd class="text-sm font-semibold text-slate-900 text-right">{{ mc.validTo }}</dd>
+          </div>
+          <div class="py-3 flex justify-between gap-4">
+            <dt class="text-sm font-semibold text-slate-500">Attending doctor</dt>
+            <dd class="text-sm font-semibold text-slate-900 text-right">{{ mc.doctor }}</dd>
+          </div>
+        </dl>
+
+        <button
+          @click="downloadPdf"
+          class="mt-8 w-full inline-flex items-center justify-center gap-2 py-3 bg-indigo-600 text-white text-sm font-semibold rounded-xl shadow-sm hover:bg-indigo-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+        >
+          <span aria-hidden="true">⬇</span> Download PDF
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -59,6 +76,7 @@ import { apiFetch } from '../../services/api'
 
 // Null until the backend confirms an issued certificate — no sample/seed data.
 const mc = ref(null)
+const loading = ref(true)
 
 onMounted(async () => {
   try {
@@ -73,6 +91,8 @@ onMounted(async () => {
     }
   } catch {
     mc.value = null // no certificate yet → empty state
+  } finally {
+    loading.value = false
   }
 })
 
