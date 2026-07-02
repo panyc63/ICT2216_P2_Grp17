@@ -1,17 +1,17 @@
 <template>
   <form @submit.prevent="submitAnswers" class="space-y-6">
     <div v-for="question in questions" :key="question.id">
-      <label class="block text-sm font-semibold text-slate-700 mb-2">{{ question.label }}</label>
+      <label class="block text-sm font-semibold text-slate-800 mb-2">{{ question.label }}</label>
 
       <!-- Yes / No symptom toggles -->
-      <div v-if="question.type === 'yesno'" class="flex gap-3">
+      <div v-if="question.type === 'yesno'" class="grid grid-cols-2 gap-3 max-w-sm">
         <label
           v-for="option in ['Yes', 'No']"
           :key="option"
           :class="answers[question.id] === option
-            ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-            : 'border-slate-300 text-slate-600 hover:bg-slate-50'"
-          class="flex-1 text-center border rounded-lg py-2 text-sm font-medium cursor-pointer transition-colors"
+            ? 'border-indigo-600 bg-indigo-50 text-indigo-700 ring-1 ring-indigo-500'
+            : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'"
+          class="text-center border rounded-xl py-2.5 text-sm font-semibold cursor-pointer transition-all focus-within:ring-2 focus-within:ring-indigo-500"
         >
           <input type="radio" :value="option" v-model="answers[question.id]" class="sr-only" />
           {{ option }}
@@ -22,9 +22,9 @@
       <select
         v-else-if="question.type === 'scale'"
         v-model="answers[question.id]"
-        class="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        class="block w-full max-w-sm px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
       >
-        <option value="" disabled>Select severity</option>
+        <option value="" disabled>Choose how severe it feels</option>
         <option v-for="level in ['None', 'Mild', 'Moderate', 'Severe']" :key="level" :value="level">{{ level }}</option>
       </select>
 
@@ -34,29 +34,29 @@
         type="text"
         v-model="answers[question.id]"
         :placeholder="question.placeholder"
-        class="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        class="block w-full max-w-sm px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
       />
     </div>
 
     <TurnstileWidget v-model="turnstileToken" />
 
-    <div class="flex items-center gap-4 pt-2">
+    <div class="flex flex-wrap items-center gap-4 pt-1">
       <button
         type="submit"
         :disabled="submitting"
-        class="px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
       >
-        {{ submitting ? 'Submitting…' : 'Submit & Open Consultation' }}
+        {{ submitting ? 'Starting…' : 'Start my consultation' }}
       </button>
       <button
         v-if="cancellable"
         type="button"
         @click="$emit('cancel')"
-        class="text-sm font-medium text-slate-500 hover:text-slate-700"
+        class="text-sm font-semibold text-slate-500 hover:text-slate-700 rounded-lg px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
       >
         Cancel
       </button>
-      <p v-if="error" role="alert" class="text-sm font-medium text-red-600">{{ error }}</p>
+      <p v-if="error" role="alert" class="text-sm font-medium text-rose-600">{{ error }}</p>
     </div>
   </form>
 </template>

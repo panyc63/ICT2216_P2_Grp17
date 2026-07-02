@@ -1,19 +1,23 @@
 <template>
-  <div class="flex flex-col h-96 bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-    <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-      <h4 class="text-sm font-bold text-slate-900">Consultation Chat</h4>
-      <span class="text-xs text-slate-400 font-mono">{{ consultationId }}</span>
+  <div class="flex flex-col h-96 bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/60">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-500" aria-hidden="true"></span>
+        <h4 class="text-sm font-bold text-slate-900">Secure chat</h4>
+      </div>
+      <span class="text-[11px] text-slate-400 font-mono">{{ consultationId }}</span>
     </div>
 
-    <div ref="scrollArea" class="flex-1 overflow-y-auto p-4 space-y-3">
-      <p v-if="error" role="alert" class="text-xs text-red-600">{{ error }}</p>
-      <p v-if="!messages.length && !error" class="text-xs text-slate-400 text-center mt-8">
-        No messages yet — start the conversation.
-      </p>
+    <div ref="scrollArea" class="flex-1 overflow-y-auto p-4 space-y-3" aria-live="polite">
+      <p v-if="error" role="alert" class="text-xs text-rose-600 text-center">{{ error }}</p>
+      <div v-if="!messages.length && !error" class="text-center mt-10">
+        <div class="w-11 h-11 mx-auto rounded-full bg-indigo-50 text-indigo-500 flex items-center justify-center text-lg" aria-hidden="true">💬</div>
+        <p class="text-xs text-slate-400 mt-2">No messages yet — say hello to get started.</p>
+      </div>
       <div v-for="m in messages" :key="m.message_id" :class="isMine(m) ? 'items-end' : 'items-start'" class="flex flex-col">
         <div
-          :class="isMine(m) ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-900'"
-          class="max-w-[75%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words"
+          :class="isMine(m) ? 'bg-indigo-600 text-white rounded-br-md' : 'bg-slate-100 text-slate-900 rounded-bl-md'"
+          class="max-w-[75%] rounded-2xl px-3.5 py-2 text-sm whitespace-pre-wrap break-words shadow-sm"
         >{{ m.messageBody }}</div>
         <span class="text-[10px] text-slate-400 mt-1">{{ formatTime(m.sent_at) }}</span>
       </div>
@@ -26,10 +30,14 @@
         maxlength="1000"
         aria-label="Message"
         placeholder="Type a message…"
-        class="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-indigo-600"
+        class="flex-1 px-3.5 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
       >
-      <button type="submit" :disabled="sending || !draft.trim()" class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg disabled:opacity-50">
-        Send
+      <button
+        type="submit"
+        :disabled="sending || !draft.trim()"
+        class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+      >
+        {{ sending ? 'Sending…' : 'Send' }}
       </button>
     </form>
   </div>
