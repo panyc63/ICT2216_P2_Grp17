@@ -27,7 +27,15 @@ set -euo pipefail
 # --- config (env with sensible defaults) ---
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
-HEALTH_URL="${HEALTH_URL:-https://localhost/api/health}"
+# Caddy terminates TLS only for its configured DOMAIN (SNI-bound), so probing
+# https://localhost fails the handshake. Resolve DOMAIN from the environment or the compose
+# env file and probe THAT hostname pinned to loopback (--resolve) below.
+DOMAIN="${DOMAIN:-}"
+if [ -z "$DOMAIN" ] && [ -f "$ENV_FILE" ]; then
+  DOMAIN="$(grep -E '^DOMAIN=' "$ENV_FILE" | head -n 1 | cut -d= -f2- | tr -d '"'"'\r'"'"')"
+fi
+DOMAIN="${DOMAIN:-localhost}"
+HEALTH_URL="${HEALTH_URL:-https://${DOMAIN}/api/health}"
 
 # Services that MUST be up + healthy for the deploy to count as good.
 REQUIRED_SERVICES=(db backend frontend caddy)
@@ -107,17 +115,19 @@ for service in "${OPTIONAL_SERVICES[@]}"; do
   esac
 done
 
-# 2. Caddy answering on the published host ports 80 and 443.
-echo "[2/4] Checking Caddy is listening on host ports 80 and 443..."
-# Port 80 typically 308-redirects to HTTPS; -f would treat 3xx as success anyway, and we
-# only care that Caddy answers, so a bare connect + response is enough.
-curl -fsS -o /dev/null "http://localhost:80/" \
-  || fail "Caddy did not respond on http://localhost:80"
+# 2. Caddy answering on the published host ports 80 and 443. We hit the real DOMAIN (so
+# Caddy's SNI/vhost + cert match) but pin it to loopback with --resolve, so this works on the
+# VM without relying on public DNS/NAT hairpinning.
+echo "[2/4] Checking Caddy on host ports 80 and 443 (host: ${DOMAIN})..."
+# Port 80 typically 308-redirects to HTTPS; -f treats 3xx as success, and we only care that
+# Caddy answers.
+curl -fsS -o /dev/null --resolve "${DOMAIN}:80:127.0.0.1" "http://${DOMAIN}/" \
+  || fail "Caddy did not respond on port 80 for ${DOMAIN}"
 echo "  ok: Caddy responded on port 80"
-# -k: the localhost cert is Caddy's internal CA (or an ACME cert for a non-localhost DOMAIN),
-# so skip trust verification here — we are asserting reachability, not the cert chain.
-curl -fsSk -o /dev/null "https://localhost:443/" \
-  || fail "Caddy did not respond on https://localhost:443"
+# -k: skip trust verification (staging/internal certs are fine here — we assert reachability +
+# a successful TLS handshake for the domain, not the cert chain).
+curl -fsSk -o /dev/null --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/" \
+  || fail "Caddy did not complete TLS on port 443 for ${DOMAIN}"
 echo "  ok: Caddy responded on port 443"
 
 # 3. Frontend nginx serving on 8080. It is only exposed on the compose network (not
@@ -136,7 +146,7 @@ fi
 # 4. API health endpoint through the full Caddy -> nginx -> backend path.
 # Backend defines GET /api/health -> 200 {"status":"ok"} (backend/server.js).
 echo "[4/4] Checking API health at ${HEALTH_URL}..."
-health_body="$(curl -fsSk "$HEALTH_URL")" \
+health_body="$(curl -fsSk --resolve "${DOMAIN}:443:127.0.0.1" "$HEALTH_URL")" \
   || fail "health check did not return HTTP 200 from ${HEALTH_URL}"
 case "$health_body" in
   *'"status":"ok"'*|*'"status": "ok"'*)
