@@ -41,6 +41,7 @@ import {
   parseCookies,
   randomToken,
   rateLimit,
+  resolveMailerConfig,
   scanAttachmentMetadata,
   sessionPayload,
   setSessionCookie,
@@ -85,17 +86,20 @@ const db = mysql.createPool({
   queueLimit: 0,
 });
 
-const transporter = config.resendApiKey
-  ? nodemailer.createTransport({
-      host: 'smtp.resend.com',
-      port: 465,
-      secure: true,
-      auth: {
-        user: 'resend',
-        pass: config.resendApiKey,
-      },
-    })
-  : null;
+// Mailer selection: a generic SMTP provider (Brevo/Gmail/SendGrid/…) wins when SMTP_HOST is
+// set; otherwise fall back to the Resend shortcut; otherwise null => demo mode (verification
+// links are surfaced in the API response / server log instead of emailed).
+const mailerConfig = resolveMailerConfig(config);
+const transporter = mailerConfig ? nodemailer.createTransport(mailerConfig) : null;
+
+// Surface mailer configuration at boot so misconfiguration is obvious (never fatal).
+if (transporter) {
+  transporter.verify()
+    .then(() => console.info(`[email] transporter ready (from: ${config.mailFrom})`))
+    .catch((err) => console.error(`[email] transporter verify FAILED — delivery will not work: ${err.message}`));
+} else {
+  console.warn('[email] delivery disabled (no SMTP_HOST and no RESEND_API_KEY): verification/reset links are surfaced in the API response and server log (demo mode); MFA OTPs cannot be delivered.');
+}
 
 if (!transporter) {
   console.warn(
@@ -177,6 +181,7 @@ app.get('/api/doctors', asyncHandler(authenticate), requireRole('Nurse', 'Admin'
 app.get('/api/recordings', asyncHandler(authenticate), requireRole('Admin'), asyncHandler(listRecordings));
 app.patch('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(updateStaff));
 app.delete('/api/staff/:id', asyncHandler(authenticate), requireRole('Admin'), requireRecentReauth, asyncHandler(deactivateStaff));
+app.post('/api/admin/email-test', resetLimit, asyncHandler(authenticate), requireRole('Admin'), asyncHandler(sendTestEmail));
 
 app.post('/api/consultations', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(bookConsultation));
 app.get('/api/consultations', asyncHandler(authenticate), asyncHandler(listConsultations));
@@ -186,6 +191,7 @@ app.post('/api/triage', asyncHandler(authenticate), requireRole('Patient'), clin
 app.get('/api/nurse/queue', asyncHandler(authenticate), requireRole('Nurse', 'Doctor', 'Admin'), asyncHandler(listQueue));
 app.patch('/api/nurse/queue/:id', asyncHandler(authenticate), requireRole('Nurse', 'Admin'), asyncHandler(updateQueue));
 
+app.get('/api/patient/outstanding', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(getPatientOutstanding));
 app.get('/api/payments/quote', paymentLimit, asyncHandler(authenticate), requireRole('Patient'), asyncHandler(getCheckoutQuote));
 app.post('/api/payments/checkout', paymentLimit, asyncHandler(authenticate), requireRole('Patient'), asyncHandler(createCheckout));
 app.get('/api/payments/:id', asyncHandler(authenticate), asyncHandler(getPayment));
@@ -253,14 +259,14 @@ async function sendMail({ to, subject, html, text }) {
   // observable instead of silent, and signal it to the caller so demo-mode recovery
   // (logging/returning verification links) can kick in.
   if (!transporter) {
-    console.warn(`[email] delivery skipped (RESEND_API_KEY unset): "${subject}" -> ${to}`);
+    console.warn(`[email] delivery skipped (no SMTP_HOST / RESEND_API_KEY): "${subject}" -> ${to}`);
     return { skipped: true };
   }
   // A transporter IS configured: never let a delivery failure throw out of the calling
   // handler (registration/reset must still complete). Report delivery status structurally.
   try {
     await transporter.sendMail({
-      from: '"MediFlow Security" <onboarding@resend.dev>',
+      from: config.mailFrom,
       to,
       subject,
       html,
@@ -271,6 +277,25 @@ async function sendMail({ to, subject, html, text }) {
     console.error(`[email] delivery FAILED: "${subject}" -> ${to}: ${error.message}`);
     return { skipped: false, delivered: false };
   }
+}
+
+// Admin-only: send a test email to the caller so the team can confirm delivery works from the
+// running deployment (config, sender verification, network). Reports the delivery outcome.
+async function sendTestEmail(req, res) {
+  const result = await sendMail({
+    to: req.user.email,
+    subject: 'MediFlow email delivery test',
+    html: '<p>This is a test email from MediFlow. If you received it, email delivery is configured correctly.</p>',
+    text: 'This is a test email from MediFlow. If you received it, email delivery is configured correctly.',
+  });
+  await writeAudit(req, { actorId: req.user.user_id, action: 'EMAIL_TEST', resourceType: 'SYSTEM', outcome: result.delivered ? 'SUCCESS' : 'FAILURE', metadata: { to: req.user.email, skipped: !!result.skipped } });
+  if (result.skipped) {
+    return res.status(503).json({ status: 'error', message: 'Email delivery is not configured (set SMTP_HOST or RESEND_API_KEY).' });
+  }
+  if (!result.delivered) {
+    return res.status(502).json({ status: 'error', message: 'Email provider rejected the message. Check SMTP credentials, sender verification, and the server logs.' });
+  }
+  res.status(200).json({ status: 'ok', message: `Test email sent to ${req.user.email}.` });
 }
 
 async function writeAudit(req, { actorId = null, action, resourceType, resourceId = null, outcome, metadata = {} }) {
@@ -1038,7 +1063,30 @@ async function updateQueue(req, res) {
 const CONSULTATION_FEE_CENTS = 4500;
 
 async function computeCheckoutAmount(patientId, consultationId) {
-  // Two static queries (no string interpolation into SQL) keep this injection-safe.
+  // The flat consultation fee is charged ONLY for a real consultation the patient owns that a
+  // doctor has engaged (Active/Completed) and that has not already been paid. A fresh account
+  // with no such consultation therefore owes $0 — the fee is never fabricated on an empty quote.
+  let consultationFeeCents = 0;
+  let billableConsultationId = null;
+  if (consultationId) {
+    const owned = await query(
+      `SELECT c.consultation_id FROM consultations c
+       WHERE c.consultation_id = ? AND c.patient_id = ?
+         AND c.session_status IN ('Active', 'Completed')
+         AND NOT EXISTS (
+           SELECT 1 FROM payment_events pe
+           WHERE pe.consultation_id = c.consultation_id AND pe.status = 'Paid'
+         )
+       LIMIT 1`,
+      [consultationId, patientId]
+    );
+    if (owned[0]) {
+      consultationFeeCents = CONSULTATION_FEE_CENTS;
+      billableConsultationId = consultationId;
+    }
+  }
+  // Medication cost (two static queries keep this injection-safe): scoped to the consultation
+  // when one is given, else the patient's non-cancelled prescriptions.
   let rows;
   if (consultationId) {
     rows = await query(
@@ -1056,7 +1104,12 @@ async function computeCheckoutAmount(patientId, consultationId) {
     );
   }
   const medicationCents = Number(rows[0]?.meds_cents || 0);
-  return { consultationFeeCents: CONSULTATION_FEE_CENTS, medicationCents, amountCents: CONSULTATION_FEE_CENTS + medicationCents };
+  return {
+    consultationFeeCents,
+    medicationCents,
+    amountCents: consultationFeeCents + medicationCents,
+    consultationId: billableConsultationId,
+  };
 }
 
 // Read-only price quote so the UI can show the real total before checkout, without
@@ -1067,9 +1120,44 @@ async function getCheckoutQuote(req, res) {
   res.status(200).json({ ...quote, currency: 'SGD' });
 }
 
+// The patient's outstanding bills: consultations a doctor engaged that are not yet paid, each
+// with its server-computed amount. Drives the Payment screen so a fresh account correctly shows
+// "nothing due" instead of a fabricated fee.
+async function getPatientOutstanding(req, res) {
+  const consultations = await query(
+    `SELECT c.consultation_id, c.session_status, c.created_at FROM consultations c
+     WHERE c.patient_id = ?
+       AND c.session_status IN ('Active', 'Completed')
+       AND NOT EXISTS (
+         SELECT 1 FROM payment_events pe
+         WHERE pe.consultation_id = c.consultation_id AND pe.status = 'Paid'
+       )
+     ORDER BY c.created_at DESC`,
+    [req.user.user_id]
+  );
+  const outstanding = [];
+  for (const c of consultations) {
+    const quote = await computeCheckoutAmount(req.user.user_id, c.consultation_id);
+    if (quote.amountCents > 0) {
+      outstanding.push({
+        consultationId: c.consultation_id,
+        sessionStatus: c.session_status,
+        createdAt: c.created_at,
+        ...quote,
+        currency: 'SGD',
+      });
+    }
+  }
+  res.status(200).json({ outstanding });
+}
+
 async function createCheckout(req, res) {
   const consultationId = assertOptionalString(req.body.consultationId, 'consultationId', { min: 4, max: 36 });
   const { amountCents, consultationFeeCents, medicationCents } = await computeCheckoutAmount(req.user.user_id, consultationId);
+  // Never open a checkout (or create an empty Pending row) when there is genuinely nothing to pay.
+  if (amountCents <= 0) {
+    return res.status(400).json({ error: 'Nothing due on this account.' });
+  }
   const reference = `MF-CHK-${Date.now()}`;
   const result = await execute(
     `INSERT INTO payment_events (patient_id, consultation_id, checkout_reference, amount_cents, currency, status)

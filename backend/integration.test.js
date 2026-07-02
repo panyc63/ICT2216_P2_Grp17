@@ -395,25 +395,51 @@ test('chat: owner patient + assigned doctor exchange messages; a different patie
   assert.equal(intruderPost.status, 403);
 });
 
-// --- Payment: amount is computed server-side, never trusted from the client -
-test('payment: checkout amount is server-derived and ignores a client-supplied amount', async () => {
-  const patient = mintSession(SEED_PATIENT);
+// --- Payment: fee only for a real unpaid consultation; server-derived amount --
+test('payment: fee is charged only for a real unpaid consultation, and the amount is server-derived', async () => {
+  const patient = mintSession(SEED_PATIENT); // MH-U006 (Active); seed consultation MH-C001 is already Paid.
   const csrf = await getCsrf();
 
-  const quote = await (await api('/api/payments/quote', { session: patient })).json();
-  assert.equal(typeof quote.amountCents, 'number');
-  assert.equal(quote.amountCents, quote.consultationFeeCents + quote.medicationCents);
-  assert.ok(quote.consultationFeeCents > 0);
+  // (a) No consultation supplied => nothing is fabricated (this is the new-user "$45" bug fix).
+  const baseQuote = await (await api('/api/payments/quote', { session: patient })).json();
+  assert.equal(baseQuote.consultationFeeCents, 0);
+  assert.equal(baseQuote.amountCents, 0);
 
-  // Malicious client tries to pay 1 cent; the server must ignore req.body.amountCents.
-  const res = await api('/api/payments/checkout', { method: 'POST', session: patient, csrf, body: { amountCents: 1 } });
-  assert.equal(res.status, 201);
-  const checkout = await res.json();
-  assert.equal(checkout.amountCents, quote.amountCents);
-  assert.notEqual(checkout.amountCents, 1);
+  // (b) An already-Paid consultation (seed MH-C001) is not billable again.
+  const paidQuote = await (await api('/api/payments/quote?consultationId=MH-C001', { session: patient })).json();
+  assert.equal(paidQuote.consultationFeeCents, 0);
 
-  const [rows] = await db.execute('SELECT amount_cents FROM payment_events WHERE checkout_reference = ?', [checkout.checkoutReference]);
-  assert.equal(rows[0].amount_cents, quote.amountCents);
+  // (c) Checkout is refused when there is nothing due (no empty Pending row is created).
+  assert.equal((await api('/api/payments/checkout', { method: 'POST', session: patient, csrf, body: {} })).status, 400);
+
+  // (d) Outstanding is empty when the patient has no unpaid, doctor-engaged consultation.
+  const before = await (await api('/api/patient/outstanding', { session: patient })).json();
+  assert.equal(before.outstanding.length, 0);
+
+  // Set up a real, unpaid, doctor-engaged consultation for this patient.
+  await db.execute("INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status) VALUES ('MH-CPAYTEST','MH-U006','MH-U002','Completed')");
+  try {
+    // (e) The flat fee now applies exactly once (no meds on this consultation).
+    const quote = await (await api('/api/payments/quote?consultationId=MH-CPAYTEST', { session: patient })).json();
+    assert.equal(quote.consultationFeeCents, 4500);
+    assert.equal(quote.amountCents, 4500);
+
+    // (f) It surfaces in the outstanding list.
+    const out = await (await api('/api/patient/outstanding', { session: patient })).json();
+    assert.ok(out.outstanding.some((o) => o.consultationId === 'MH-CPAYTEST' && o.amountCents === 4500));
+
+    // (g) Checkout is server-derived and ignores any client-supplied amount.
+    const res = await api('/api/payments/checkout', { method: 'POST', session: patient, csrf, body: { consultationId: 'MH-CPAYTEST', amountCents: 1 } });
+    assert.equal(res.status, 201);
+    const checkout = await res.json();
+    assert.equal(checkout.amountCents, 4500);
+    assert.notEqual(checkout.amountCents, 1);
+    const [rows] = await db.execute('SELECT amount_cents FROM payment_events WHERE checkout_reference = ?', [checkout.checkoutReference]);
+    assert.equal(rows[0].amount_cents, 4500);
+  } finally {
+    await db.execute("DELETE FROM payment_events WHERE consultation_id = 'MH-CPAYTEST'");
+    await db.execute("DELETE FROM consultations WHERE consultation_id = 'MH-CPAYTEST'");
+  }
 });
 
 // --- Phase 3: Pharmacy inventory + fulfilment -----------------------------
