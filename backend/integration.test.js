@@ -766,6 +766,34 @@ test('medication: delivery needs an address, self-collect is always allowed, rec
   assert.ok(rows[0].delivered_at);
 });
 
+// --- WebAuthn / FIDO2 passkeys (Admin/Doctor step-up) ----------------------
+test('webauthn: register options return an RP-bound challenge for a doctor; a patient is refused', async () => {
+  const doctor = mintSession(SEED_DOCTOR);
+  const patient = mintSession(SEED_PATIENT);
+  const csrf = await getCsrf();
+  const opts = await api('/api/webauthn/register/options', { method: 'POST', session: doctor, csrf, body: {} });
+  assert.equal(opts.status, 200);
+  const body = await opts.json();
+  assert.ok(body.challenge && body.rp && body.rp.id);
+  // Passkeys are privileged-account only — a patient cannot use the endpoints.
+  assert.equal((await api('/api/webauthn/register/options', { method: 'POST', session: patient, csrf, body: {} })).status, 403);
+});
+
+test('webauthn: a garbage attestation cannot be verified (400) and auth options need a registered passkey (400)', async () => {
+  const doctor = mintSession(SEED_DOCTOR);
+  const csrf = await getCsrf();
+  // Seed a challenge, then submit an unverifiable attestation.
+  await api('/api/webauthn/register/options', { method: 'POST', session: doctor, csrf, body: {} });
+  const verify = await api('/api/webauthn/register/verify', {
+    method: 'POST', session: doctor, csrf,
+    body: { id: 'x', rawId: 'x', response: {}, type: 'public-key' },
+  });
+  assert.equal(verify.status, 400);
+  // No passkey is registered (verification never succeeds without an authenticator), so an
+  // authentication ceremony cannot start.
+  assert.equal((await api('/api/webauthn/authenticate/options', { method: 'POST', session: doctor, csrf, body: {} })).status, 400);
+});
+
 // --- SITBank-parity: active DB state cleanup -------------------------------
 test('state cleanup purges expired/dead rows and leaves live data intact', async () => {
   // Old WebRTC signalling (3 days) + an expired reset token should be purged.
