@@ -11,6 +11,8 @@ services:
   db:
     image: mysql:8.0
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env.production}
       MYSQL_DATABASE: ${DB_NAME:-mediflow_db}
@@ -26,6 +28,8 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     env_file: .env.production
     environment:
       NODE_ENV: production
@@ -45,6 +49,8 @@ services:
   clamav:
     image: clamav/clamav:stable
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     expose:
       - "3310"
     healthcheck:
@@ -63,6 +69,8 @@ services:
         # Public Cloudflare Turnstile site key (empty => the anti-automation widget is off).
         VITE_TURNSTILE_SITEKEY: ${VITE_TURNSTILE_SITEKEY:-}
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     depends_on:
       - backend
     expose:
@@ -71,6 +79,8 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
     depends_on:
       - frontend
     ports:

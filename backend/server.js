@@ -490,12 +490,14 @@ async function registerPatient(req, res) {
     message: 'Account created. Enter the 6-digit code we emailed you to verify your address.',
     user: { user_id: userId, role: 'Patient', status: 'PendingVerification' },
   };
-  // Verification must never dead-end. If the email was NOT actually delivered — no provider
-  // configured (skipped) OR a configured provider failed — log the code for the operator AND
-  // return it (demo mode) so the account can still be verified. Once email reliably delivers
-  // this field is absent and the code is never exposed.
+  // If the email was not delivered, log the code so an operator can recover it. Only surface it
+  // in the RESPONSE when NO provider is configured at all (skipped => demo mode). A configured-
+  // but-failing provider must NOT hand the code back to the caller, or an attacker could verify
+  // an email they do not own during a provider outage.
   if (mailResult.skipped || mailResult.delivered === false) {
     console.info(`[email] verification code for ${email} (email not delivered): ${otp}`);
+  }
+  if (mailResult.skipped) {
     responseBody.devOtp = otp;
   }
 
@@ -504,7 +506,7 @@ async function registerPatient(req, res) {
 
 // 6-digit numeric email-verification code.
 function generateEmailOtp() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(crypto.randomInt(100000, 1000000));
 }
 
 async function sendVerificationOtp(email, otp) {
@@ -559,10 +561,16 @@ async function resendVerification(req, res) {
   await writeAudit(req, { actorId: user.user_id, action: 'RESEND_VERIFICATION', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
   if (mailResult.skipped || mailResult.delivered === false) {
     console.info(`[email] resent verification code for ${email} (email not delivered): ${otp}`);
+  }
+  // Only the true no-provider demo mode surfaces the code (never a delivery failure).
+  if (mailResult.skipped) {
     return res.status(200).json({ ...generic, devOtp: otp });
   }
   res.status(200).json(generic);
 }
+
+const MAX_FAILED_LOGINS = 5;
+const LOCKOUT_MINUTES = 15;
 
 async function login(req, res) {
   const email = assertEmail(req.body.email);
@@ -574,10 +582,28 @@ async function login(req, res) {
     return res.status(401).json({ error: 'Invalid email or password credentials.' });
   }
 
+  // Account-level lockout: an active lock rejects even a correct password, so a distributed
+  // (IP-rotating) attacker cannot bypass throttling by moving IPs (complements the per-IP limiter).
+  if (user.locked_until && new Date(user.locked_until) > new Date()) {
+    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE', metadata: { reason: 'locked' } });
+    return res.status(429).json({ error: 'Account temporarily locked after repeated failed attempts. Please try again later.' });
+  }
+
   const passwordMatches = await verifyPassword(password, user.password_hash);
   if (!passwordMatches) {
-    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE', metadata: { reason: 'bad_password' } });
+    const failures = Number(user.failed_login_count || 0) + 1;
+    if (failures >= MAX_FAILED_LOGINS) {
+      await execute('UPDATE users SET failed_login_count = ?, locked_until = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE user_id = ?', [failures, LOCKOUT_MINUTES, user.user_id]);
+    } else {
+      await execute('UPDATE users SET failed_login_count = ? WHERE user_id = ?', [failures, user.user_id]);
+    }
+    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE', metadata: { reason: failures >= MAX_FAILED_LOGINS ? 'locked' : 'bad_password' } });
     return res.status(401).json({ error: 'Invalid email or password credentials.' });
+  }
+
+  // Correct password: clear any accumulated failure/lock state.
+  if (Number(user.failed_login_count || 0) > 0 || user.locked_until) {
+    await execute('UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE user_id = ?', [user.user_id]);
   }
 
   if (!isPasswordHash(user.password_hash)) {
@@ -606,7 +632,7 @@ async function login(req, res) {
 
 async function createMfaChallenge(user, subject) {
   const challengeId = randomToken(16);
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  const otp = String(crypto.randomInt(100000, 1000000));
   await execute(
     `UPDATE users
      SET mfa_challenge_id = ?, mfa_otp_hash = ?, mfa_expires_at = DATE_ADD(NOW(), INTERVAL 5 MINUTE)

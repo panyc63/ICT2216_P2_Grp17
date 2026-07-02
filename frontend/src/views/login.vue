@@ -191,7 +191,11 @@ const handleLogin = async () => {
 
     setTimeout(() => {
       toast.show = false
-      router.push(router.currentRoute.value.query.redirect || dashboardForRole(data.user.role))
+      // Only honour a same-site relative redirect (a single leading "/"), never an absolute or
+      // protocol-relative URL, to prevent open-redirect via the ?redirect query param.
+      const requested = router.currentRoute.value.query.redirect
+      const safeRedirect = typeof requested === 'string' && /^\/(?!\/)/.test(requested) ? requested : null
+      router.push(safeRedirect || dashboardForRole(data.user.role))
     }, 1500)
 
   } catch (error) {

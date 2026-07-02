@@ -106,7 +106,8 @@ const payNow = async (item) => {
       body: JSON.stringify({ consultationId: item.consultationId }),
     })
     // Real Stripe test-mode Checkout: redirect to the hosted page (pay with test card 4242…).
-    if (data.provider === 'stripe' && data.checkoutUrl) {
+    // Defence-in-depth: only ever navigate to Stripe's own HTTPS checkout origin.
+    if (data.provider === 'stripe' && typeof data.checkoutUrl === 'string' && data.checkoutUrl.startsWith('https://checkout.stripe.com/')) {
       window.location.href = data.checkoutUrl
       return
     }
