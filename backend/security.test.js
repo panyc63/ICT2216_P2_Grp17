@@ -21,6 +21,7 @@ import {
   issueCsrfToken,
   makeTurnCredentials,
   rateLimit,
+  resolveMailerConfig,
   randomToken,
   safeEqual,
   scanAttachmentMetadata,
@@ -76,6 +77,25 @@ function makeRes() {
 
 // =========================================================================
 // Password hashing (R: Encryption at rest / credential protection)
+// =========================================================================
+test('resolveMailerConfig: SMTP > Resend > none precedence and auth shaping', () => {
+  // SMTP host wins even when a Resend key is present.
+  const smtp = resolveMailerConfig({
+    smtpHost: 'smtp-relay.brevo.com', smtpPort: 587, smtpSecure: false,
+    smtpUser: 'user@x', smtpPass: 'k', resendApiKey: 'rk',
+  });
+  assert.deepEqual(smtp, { host: 'smtp-relay.brevo.com', port: 587, secure: false, auth: { user: 'user@x', pass: 'k' } });
+  // No SMTP user => no auth block (relay-by-IP style).
+  assert.equal(resolveMailerConfig({ smtpHost: 'mail.local', smtpPort: 25, smtpSecure: false, smtpUser: '' }).auth, undefined);
+  // Falls back to Resend when no SMTP host.
+  const resend = resolveMailerConfig({ smtpHost: '', resendApiKey: 'rk' });
+  assert.equal(resend.host, 'smtp.resend.com');
+  assert.equal(resend.secure, true);
+  assert.equal(resend.auth.pass, 'rk');
+  // Nothing configured => null (demo mode).
+  assert.equal(resolveMailerConfig({ smtpHost: '', resendApiKey: '' }), null);
+});
+
 // =========================================================================
 test('password hashes are not plaintext and verify correctly', async () => {
   const hash = await hashPassword('CorrectHorseBatteryStaple1');

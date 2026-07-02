@@ -34,6 +34,15 @@ export function getConfig() {
     dataEncryptionKey: requireSecret('DATA_ENCRYPTION_KEY', 'dev-only-change-data-key-32-bytes-minimum'),
     mcSigningKey: requireSecret('MC_SIGNING_KEY', 'dev-only-change-mc-signing-key-32-bytes-minimum'),
     stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+    // Email delivery: a generic SMTP provider (Brevo, Gmail app-password, SendGrid, …) takes
+    // precedence when SMTP_HOST is set; RESEND_API_KEY is kept as a fallback shortcut. When
+    // neither is set the app runs in demo mode (verification links surfaced in the API response).
+    smtpHost: process.env.SMTP_HOST || '',
+    smtpPort: Number(process.env.SMTP_PORT || 587),
+    smtpSecure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    smtpUser: process.env.SMTP_USER || '',
+    smtpPass: process.env.SMTP_PASS || '',
+    mailFrom: process.env.MAIL_FROM || '"MediFlow Security" <onboarding@resend.dev>',
     resendApiKey: process.env.RESEND_API_KEY || '',
     mfaRequiredRoles: (process.env.MFA_REQUIRED_ROLES || (isProduction ? STAFF_ROLES.join(',') : ''))
       .split(',')
@@ -71,6 +80,24 @@ export function getConfig() {
   }
 
   return config;
+}
+
+// Pure selection of nodemailer transport options from config (kept here, free of a nodemailer
+// import, so it is unit-testable). Precedence: an explicit SMTP host wins, else the Resend
+// shortcut, else null (email disabled => demo mode). server.js turns this into a transporter.
+export function resolveMailerConfig(config) {
+  if (config.smtpHost) {
+    return {
+      host: config.smtpHost,
+      port: config.smtpPort,
+      secure: config.smtpSecure,
+      auth: config.smtpUser ? { user: config.smtpUser, pass: config.smtpPass } : undefined,
+    };
+  }
+  if (config.resendApiKey) {
+    return { host: 'smtp.resend.com', port: 465, secure: true, auth: { user: 'resend', pass: config.resendApiKey } };
+  }
+  return null;
 }
 
 export function applySecurityHeaders(config) {
