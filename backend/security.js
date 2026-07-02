@@ -61,11 +61,9 @@ export function getConfig() {
     // Cloudflare Turnstile anti-automation. Secret unset => server-side verification is a
     // no-op (graceful bypass for local/dev/CI), matching the other optional integrations.
     turnstileSecret: process.env.TURNSTILE_SECRET || '',
-    // WebAuthn / FIDO2 passkeys for privileged accounts. RP ID must be the site's
-    // registrable domain (the effective host), origin the full https origin.
-    webauthnRpId: process.env.WEBAUTHN_RP_ID || 'localhost',
-    webauthnRpName: process.env.WEBAUTHN_RP_NAME || 'MediFlow',
-    webauthnOrigin: process.env.WEBAUTHN_ORIGIN || 'http://localhost:4180',
+    // Authenticator-app TOTP (RFC 6238) step-up for privileged accounts. The issuer label is
+    // what shows next to the account inside the user's authenticator app.
+    totpIssuer: process.env.TOTP_ISSUER || 'MediFlow',
   };
 
   if (missing.length > 0) {

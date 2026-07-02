@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import mysql from 'mysql2/promise';
 import { signJwt, sessionPayload, hashToken, sha256 } from './security.js';
 import { runCleanup } from './cleanup.js';
+import { totpToken } from './totp.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const JWT_SECRET = process.env.JWT_SECRET || 'ci-only-jwt-secret-change-me-32-bytes-minimum';
@@ -128,6 +129,41 @@ test('staff onboarding is restricted to workplace email domains', async () => {
   // The official workplace domain is accepted.
   const good = await api('/api/staff', { method: 'POST', session: admin, csrf, body: { name: 'Clinic Doc', email: 'newdoc@mediflow.com', password: 'Password123!', role: 'Doctor' } });
   assert.equal(good.status, 201);
+});
+
+// --- Account verification (demo mode: no email provider) ------------------
+test('registration returns a verification link when email delivery is unavailable, and that link activates the account', async () => {
+  const email = `itest-verify-${Date.now()}@example.com`;
+  const password = 'Password123!';
+  await db.execute('DELETE FROM users WHERE email = ?', [email]).catch(() => {});
+  const csrf = await getCsrf();
+
+  // The harness runs with no RESEND_API_KEY (transporter null), so registration must surface
+  // the verification link in the response so the account can still be activated.
+  const register = await api('/api/register', { method: 'POST', csrf, body: { name: 'Verify Me', email, password } });
+  assert.equal(register.status, 201);
+  const body = await register.json();
+  assert.equal(body.user.status, 'PendingVerification');
+  assert.ok(typeof body.verificationUrl === 'string', 'expected a verificationUrl in the response');
+  assert.ok(body.verificationUrl.includes('/api/verify-email/'), `unexpected verificationUrl: ${body.verificationUrl}`);
+
+  // Login is blocked until the email is verified.
+  const preVerifyLogin = await api('/api/login', { method: 'POST', csrf: await getCsrf(), body: { email, password } });
+  assert.equal(preVerifyLogin.status, 403);
+
+  // Hitting the returned link's token activates the account (status flips to Active).
+  const verifyPath = new URL(body.verificationUrl).pathname;
+  const verify = await api(verifyPath);
+  assert.equal(verify.status, 200);
+  const [rows] = await db.execute('SELECT status, is_verified FROM users WHERE email = ?', [email]);
+  assert.equal(rows[0].status, 'Active');
+  assert.equal(Number(rows[0].is_verified), 1);
+
+  // And login now succeeds for the (Patient, MFA-not-required) account.
+  const postVerifyLogin = await api('/api/login', { method: 'POST', csrf: await getCsrf(), body: { email, password } });
+  assert.equal(postVerifyLogin.status, 200);
+
+  await db.execute('DELETE FROM users WHERE email = ?', [email]).catch(() => {});
 });
 
 // --- Object-level authorization ------------------------------------------
@@ -766,32 +802,47 @@ test('medication: delivery needs an address, self-collect is always allowed, rec
   assert.ok(rows[0].delivered_at);
 });
 
-// --- WebAuthn / FIDO2 passkeys (Admin/Doctor step-up) ----------------------
-test('webauthn: register options return an RP-bound challenge for a doctor; a patient is refused', async () => {
+// --- Authenticator-app TOTP (Admin/Doctor step-up) -------------------------
+test('totp: enroll options return a base32 secret + otpauth URI for a doctor; a patient is refused', async () => {
   const doctor = mintSession(SEED_DOCTOR);
   const patient = mintSession(SEED_PATIENT);
   const csrf = await getCsrf();
-  const opts = await api('/api/webauthn/register/options', { method: 'POST', session: doctor, csrf, body: {} });
+  // Clean slate for the seed doctor so the test is idempotent across re-runs.
+  await db.execute("UPDATE users SET totp_secret_encrypted = NULL, totp_enabled = FALSE, totp_enrolled_at = NULL WHERE user_id = ?", [SEED_DOCTOR.user_id]);
+  const opts = await api('/api/totp/enroll/options', { method: 'POST', session: doctor, csrf, body: {} });
   assert.equal(opts.status, 200);
   const body = await opts.json();
-  assert.ok(body.challenge && body.rp && body.rp.id);
-  // Passkeys are privileged-account only — a patient cannot use the endpoints.
-  assert.equal((await api('/api/webauthn/register/options', { method: 'POST', session: patient, csrf, body: {} })).status, 403);
+  assert.match(body.secret, /^[A-Z2-7]+$/);
+  assert.match(body.otpauthUrl, /^otpauth:\/\/totp\//);
+  // TOTP step-up is a privileged-account feature — a patient cannot use the endpoints.
+  assert.equal((await api('/api/totp/enroll/options', { method: 'POST', session: patient, csrf, body: {} })).status, 403);
 });
 
-test('webauthn: a garbage attestation cannot be verified (400) and auth options need a registered passkey (400)', async () => {
+test('totp: a correct code confirms enrollment, a wrong code is rejected, and disable needs a valid code', async () => {
   const doctor = mintSession(SEED_DOCTOR);
   const csrf = await getCsrf();
-  // Seed a challenge, then submit an unverifiable attestation.
-  await api('/api/webauthn/register/options', { method: 'POST', session: doctor, csrf, body: {} });
-  const verify = await api('/api/webauthn/register/verify', {
-    method: 'POST', session: doctor, csrf,
-    body: { id: 'x', rawId: 'x', response: {}, type: 'public-key' },
-  });
-  assert.equal(verify.status, 400);
-  // No passkey is registered (verification never succeeds without an authenticator), so an
-  // authentication ceremony cannot start.
-  assert.equal((await api('/api/webauthn/authenticate/options', { method: 'POST', session: doctor, csrf, body: {} })).status, 400);
+  await db.execute("UPDATE users SET totp_secret_encrypted = NULL, totp_enabled = FALSE, totp_enrolled_at = NULL WHERE user_id = ?", [SEED_DOCTOR.user_id]);
+  const secret = (await (await api('/api/totp/enroll/options', { method: 'POST', session: doctor, csrf, body: {} })).json()).secret;
+
+  // Wrong code cannot confirm enrollment.
+  assert.equal((await api('/api/totp/enroll/verify', { method: 'POST', session: doctor, csrf, body: { token: '000000' } })).status, 400);
+  // The genuine current code confirms it and flips the DB flag.
+  const confirm = await api('/api/totp/enroll/verify', { method: 'POST', session: doctor, csrf, body: { token: totpToken(secret) } });
+  assert.equal(confirm.status, 200);
+  assert.equal((await confirm.json()).enabled, true);
+  const [rows] = await db.execute("SELECT totp_enabled FROM users WHERE user_id = ?", [SEED_DOCTOR.user_id]);
+  assert.equal(Number(rows[0].totp_enabled), 1);
+
+  // Step-up with a live code succeeds; a bad code is forbidden.
+  assert.equal((await api('/api/totp/verify', { method: 'POST', session: doctor, csrf, body: { token: totpToken(secret) } })).status, 200);
+  assert.equal((await api('/api/totp/verify', { method: 'POST', session: doctor, csrf, body: { token: '000000' } })).status, 403);
+
+  // Disable is possession-gated: wrong code refused, correct code removes the authenticator.
+  assert.equal((await api('/api/totp/disable', { method: 'POST', session: doctor, csrf, body: { token: '000000' } })).status, 403);
+  assert.equal((await api('/api/totp/disable', { method: 'POST', session: doctor, csrf, body: { token: totpToken(secret) } })).status, 200);
+  const [after] = await db.execute("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE user_id = ?", [SEED_DOCTOR.user_id]);
+  assert.equal(Number(after[0].totp_enabled), 0);
+  assert.equal(after[0].totp_secret_encrypted, null);
 });
 
 // --- SITBank-parity: active DB state cleanup -------------------------------

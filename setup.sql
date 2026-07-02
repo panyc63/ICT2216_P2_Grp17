@@ -37,6 +37,11 @@ CREATE TABLE users (
     mfa_challenge_id VARCHAR(128) NULL,
     mfa_otp_hash VARCHAR(64) NULL,
     mfa_expires_at TIMESTAMP NULL DEFAULT NULL,
+    -- Authenticator-app TOTP step-up (privileged accounts). Secret is encrypted at rest and
+    -- only enabled once the user confirms a code; enrolled_at records when it went live.
+    totp_secret_encrypted TEXT NULL,
+    totp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    totp_enrolled_at TIMESTAMP NULL DEFAULT NULL,
     failed_login_count INT NOT NULL DEFAULT 0,
     locked_until TIMESTAMP NULL DEFAULT NULL,
     -- Self-service profile (PHI fields are encrypted at the application layer)
@@ -212,25 +217,6 @@ CREATE TABLE signaling_messages (
     FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE RESTRICT,
     FOREIGN KEY (sender_id) REFERENCES users(user_id) ON DELETE RESTRICT,
     INDEX idx_signaling_consultation (consultation_id, signal_id)
-);
-
--- WebAuthn / FIDO2 passkeys for privileged accounts (Admin/Doctor): a phishing-resistant
--- step-up factor. Registered authenticators + the transient ceremony challenge.
-CREATE TABLE webauthn_credentials (
-    credential_id VARCHAR(255) PRIMARY KEY,   -- base64url credential ID from the authenticator
-    user_id VARCHAR(36) NOT NULL,
-    public_key TEXT NOT NULL,                 -- base64url COSE public key
-    counter BIGINT NOT NULL DEFAULT 0,        -- signature counter (clone-detection)
-    transports VARCHAR(120) NULL,             -- CSV hint (usb, nfc, ble, internal, hybrid)
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    INDEX idx_webauthn_user (user_id)
-);
-CREATE TABLE webauthn_challenges (
-    user_id VARCHAR(36) PRIMARY KEY,          -- one in-flight ceremony per user
-    challenge VARCHAR(255) NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
 CREATE TABLE security_audit_logs (

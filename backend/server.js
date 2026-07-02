@@ -59,7 +59,7 @@ import {
 } from './security.js';
 import { scheduleCleanup } from './cleanup.js';
 import { verifyTurnstile } from './turnstile.js';
-import { registrationOptions, verifyRegistration, authenticationOptions, verifyAuthentication } from './webauthn.js';
+import { generateTotpSecret, verifyTotp, otpauthURL } from './totp.js';
 
 dotenv.config();
 
@@ -71,8 +71,9 @@ const app = express();
 // caller. (nginx's real_ip config does the equivalent for its own limit_req — see nginx.conf.)
 app.set('trust proxy', 2);
 
-// WebAuthn relying-party parameters (phishing-resistant passkeys for privileged accounts).
-const webauthnRp = { rpID: config.webauthnRpId, rpName: config.webauthnRpName, origin: config.webauthnOrigin };
+// Authenticator-app TOTP (RFC 6238) is the step-up factor for privileged accounts. The issuer
+// label is what shows up in the user's authenticator app next to the account.
+const TOTP_ISSUER = config.totpIssuer;
 
 const db = mysql.createPool({
   host: process.env.DB_HOST,
@@ -96,6 +97,12 @@ const transporter = config.resendApiKey
     })
   : null;
 
+if (!transporter) {
+  console.warn(
+    '[email] delivery DISABLED: RESEND_API_KEY is unset. Verification/reset links and MFA OTPs will be logged to this server console (demo mode) instead of emailed.'
+  );
+}
+
 // Compute-cost-aware rate limiting: each budget maps to how expensive the route is.
 // Now that req.ip resolves to the real client (trust proxy = 2), per-IP keying is meaningful.
 // Tier 1 — cryptographically expensive auth (scrypt hashing, JWT/MFA): 5 requests / 15 min.
@@ -108,6 +115,8 @@ const clinicalWriteLimit = rateLimit({ windowMs: 60 * 1000, max: 15, keyPrefix: 
 const standardReadLimit = rateLimit({ windowMs: 60 * 1000, max: 100, keyPrefix: 'read' });
 // Cheap token-lookup GET (email verification link): kept lenient, separate from the crypto tier.
 const tokenLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, keyPrefix: 'token' });
+// TOTP enroll/verify: blunt online guessing of the 6-digit authenticator code.
+const totpLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyPrefix: 'totp' });
 const chatLimit = rateLimit({ windowMs: 60 * 1000, max: 30, keyPrefix: 'chat' });
 const paymentLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 10, keyPrefix: 'payment' });
 const verificationLimit = rateLimit({ windowMs: 60 * 1000, max: 20, keyPrefix: 'mc-verify' });
@@ -197,12 +206,13 @@ app.get('/api/patient/medical-certificates/latest', asyncHandler(authenticate), 
 app.post('/api/medical-certificates/:id/revoke', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), requireRecentReauth, asyncHandler(revokeMedicalCertificate));
 app.get('/api/verify/mc/:token', verificationLimit, asyncHandler(verifyMedicalCertificate));
 
-// WebAuthn / FIDO2 passkeys — phishing-resistant step-up for privileged accounts (Admin/Doctor).
-app.get('/api/webauthn/credentials', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnListCredentials));
-app.post('/api/webauthn/register/options', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnRegisterOptions));
-app.post('/api/webauthn/register/verify', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnRegisterVerify));
-app.post('/api/webauthn/authenticate/options', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnAuthenticateOptions));
-app.post('/api/webauthn/authenticate/verify', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnAuthenticateVerify));
+// Authenticator-app TOTP (RFC 6238) — MFA step-up for privileged accounts (Admin/Doctor).
+// Verify paths are rate-limited to blunt online guessing of the 6-digit code.
+app.get('/api/totp/status', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(totpStatus));
+app.post('/api/totp/enroll/options', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(totpEnrollOptions));
+app.post('/api/totp/enroll/verify', totpLimit, asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(totpEnrollVerify));
+app.post('/api/totp/verify', totpLimit, asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(totpStepUp));
+app.post('/api/totp/disable', totpLimit, asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(totpDisable));
 
 app.get('/api/consultations/:id/messages', asyncHandler(authenticate), chatLimit, asyncHandler(listMessages));
 app.post('/api/consultations/:id/messages', asyncHandler(authenticate), chatLimit, asyncHandler(createMessage));
@@ -238,15 +248,29 @@ async function execute(sql, params = []) {
   return result;
 }
 
-async function sendMail({ to, subject, html }) {
-  if (!transporter) return { skipped: true };
-  await transporter.sendMail({
-    from: '"MediFlow Security" <onboarding@resend.dev>',
-    to,
-    subject,
-    html,
-  });
-  return { skipped: false };
+async function sendMail({ to, subject, html, text }) {
+  // No transporter => email delivery is disabled (RESEND_API_KEY unset). Make the skip
+  // observable instead of silent, and signal it to the caller so demo-mode recovery
+  // (logging/returning verification links) can kick in.
+  if (!transporter) {
+    console.warn(`[email] delivery skipped (RESEND_API_KEY unset): "${subject}" -> ${to}`);
+    return { skipped: true };
+  }
+  // A transporter IS configured: never let a delivery failure throw out of the calling
+  // handler (registration/reset must still complete). Report delivery status structurally.
+  try {
+    await transporter.sendMail({
+      from: '"MediFlow Security" <onboarding@resend.dev>',
+      to,
+      subject,
+      html,
+      ...(text !== undefined ? { text } : {}),
+    });
+    return { skipped: false, delivered: true };
+  } catch (error) {
+    console.error(`[email] delivery FAILED: "${subject}" -> ${to}: ${error.message}`);
+    return { skipped: false, delivered: false };
+  }
 }
 
 async function writeAudit(req, { actorId = null, action, resourceType, resourceId = null, outcome, metadata = {} }) {
@@ -426,7 +450,7 @@ async function registerPatient(req, res) {
   );
 
   const verificationUrl = `${config.backendPublicUrl}/api/verify-email/${verificationToken}`;
-  await sendMail({
+  const mailResult = await sendMail({
     to: email,
     subject: 'Verify your MediFlow account',
     html: `<p>Welcome to MediFlow.</p><p>Verify your account: <a href="${verificationUrl}">Verify email</a></p>`,
@@ -441,10 +465,21 @@ async function registerPatient(req, res) {
     metadata: { email },
   });
 
-  res.status(201).json({
+  const responseBody = {
     message: 'User registered successfully. Please verify your email address.',
     user: { user_id: userId, role: 'Patient', status: 'PendingVerification' },
-  });
+  };
+  // Demo / self-hosted recovery: ONLY when no email provider is configured (sendMail was
+  // skipped) do we surface the verification link so the account can still be activated. We
+  // log it for the operator AND return it in the response. This is gated to the no-email
+  // case: once a real RESEND_API_KEY is set, verification tokens are NEVER leaked in the API
+  // response or logs.
+  if (mailResult.skipped) {
+    console.info(`[email] account-verification link (demo mode) for ${email}: ${verificationUrl}`);
+    responseBody.verificationUrl = verificationUrl;
+  }
+
+  res.status(201).json(responseBody);
 }
 
 async function verifyEmail(req, res) {
@@ -531,11 +566,19 @@ async function createMfaChallenge(user, subject) {
      WHERE user_id = ?`,
     [challengeId, hashToken(otp), user.user_id]
   );
-  await sendMail({
+  const mailResult = await sendMail({
     to: user.email,
     subject,
     html: `<p>Your MediFlow verification code is <strong>${otp}</strong>.</p><p>This code expires in 5 minutes.</p>`,
   });
+  // Do NOT log the OTP value here — that would leave live one-time codes sitting in the logs
+  // by default. Instead make the delivery-failure obvious: without RESEND_API_KEY the code
+  // was generated but cannot reach the user, so MFA login cannot be completed.
+  if (mailResult.skipped) {
+    console.warn(
+      `[email] MFA OTP delivery unavailable (RESEND_API_KEY unset): ${user.email} cannot complete MFA. Set RESEND_API_KEY or disable staff MFA (MFA_REQUIRED_ROLES).`
+    );
+  }
   return { challengeId, otp };
 }
 
@@ -687,11 +730,17 @@ async function requestPasswordReset(req, res) {
       [hashToken(token), user.user_id]
     );
     const resetUrl = `${config.frontendUrl}/reset-password?token=${token}`;
-    await sendMail({
+    const mailResult = await sendMail({
       to: email,
       subject: 'Reset your MediFlow password',
       html: `<p>A password reset was requested for your account.</p><p><a href="${resetUrl}">Reset your password</a> (valid for 30 minutes).</p><p>If you did not request this, you can ignore this email.</p>`,
     });
+    // Demo / self-hosted recovery: when no email provider is configured, surface the reset
+    // link to the operator via the server log ONLY. The response body is deliberately left
+    // unchanged (anti-enumeration, no token) — the link never goes to the client.
+    if (mailResult.skipped) {
+      console.info(`[email] password-reset link (demo mode) for ${email}: ${resetUrl}`);
+    }
     await writeAudit(req, { actorId: user.user_id, action: 'FORGOT_PASSWORD', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
   } else {
     await writeAudit(req, { action: 'FORGOT_PASSWORD', resourceType: 'USER', outcome: 'FAILURE', metadata: { email } });
@@ -1375,86 +1424,79 @@ async function verifyMedicalCertificate(req, res) {
   });
 }
 
-// --- WebAuthn / FIDO2 passkeys (Admin/Doctor step-up) ---------------------------------
-const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+// --- Authenticator-app TOTP (Admin/Doctor step-up MFA) --------------------------------
+// The base32 secret is generated server-side, stored encrypted at rest, and only ever
+// returned once (at enrollment) so the user can add it to their authenticator app.
 
-async function storeWebauthnChallenge(userId, challenge) {
-  await execute(
-    `INSERT INTO webauthn_challenges (user_id, challenge, expires_at) VALUES (?, ?, ?)
-     ON DUPLICATE KEY UPDATE challenge = VALUES(challenge), expires_at = VALUES(expires_at)`,
-    [userId, challenge, new Date(Date.now() + WEBAUTHN_CHALLENGE_TTL_MS)]
-  );
+// Whether the caller has a confirmed (enabled) authenticator.
+async function totpStatus(req, res) {
+  const rows = await query('SELECT totp_enabled, totp_enrolled_at FROM users WHERE user_id = ?', [req.user.user_id]);
+  const row = rows[0] || {};
+  res.status(200).json({ enabled: Boolean(row.totp_enabled), enrolledAt: row.totp_enrolled_at || null });
 }
 
-// Single-use: read the current, unexpired challenge and delete it.
-async function takeWebauthnChallenge(userId) {
-  const rows = await query('SELECT challenge FROM webauthn_challenges WHERE user_id = ? AND expires_at > NOW() LIMIT 1', [userId]);
-  await execute('DELETE FROM webauthn_challenges WHERE user_id = ?', [userId]);
-  return rows[0]?.challenge || null;
+// Begin enrollment: mint a new secret (encrypted at rest, not yet enabled) and hand the
+// user the base32 key + otpauth URI so they can add it via QR or manual entry. Overwrites
+// any prior un-confirmed secret. A confirmed authenticator must be disabled before re-enroll.
+async function totpEnrollOptions(req, res) {
+  const rows = await query('SELECT email, totp_enabled FROM users WHERE user_id = ?', [req.user.user_id]);
+  if (rows[0]?.totp_enabled) throw badRequest('An authenticator is already enabled. Disable it before enrolling a new one.');
+  const secret = generateTotpSecret();
+  await execute('UPDATE users SET totp_secret_encrypted = ?, totp_enabled = FALSE WHERE user_id = ?', [encryptText(secret, config), req.user.user_id]);
+  const otpauthUrl = otpauthURL({ secret, accountName: rows[0]?.email || req.user.email, issuer: TOTP_ISSUER });
+  await writeAudit(req, { actorId: req.user.user_id, action: 'TOTP_ENROLL_START', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ secret, otpauthUrl, issuer: TOTP_ISSUER });
 }
 
-async function getUserCredentials(userId) {
-  return query('SELECT credential_id, public_key, counter, transports FROM webauthn_credentials WHERE user_id = ?', [userId]);
-}
-
-async function webauthnRegisterOptions(req, res) {
-  const options = await registrationOptions(webauthnRp, req.user, await getUserCredentials(req.user.user_id));
-  await storeWebauthnChallenge(req.user.user_id, options.challenge);
-  res.status(200).json(options);
-}
-
-async function webauthnRegisterVerify(req, res) {
-  const expectedChallenge = await takeWebauthnChallenge(req.user.user_id);
-  if (!expectedChallenge) throw badRequest('No active registration challenge. Start again.');
-  let credential = null;
-  try {
-    credential = await verifyRegistration(webauthnRp, req.body, expectedChallenge);
-  } catch {
-    credential = null;
+// Confirm enrollment: prove possession by submitting a code the pending secret generates.
+async function totpEnrollVerify(req, res) {
+  const token = assertString(req.body.token, 'token', { min: 6, max: 6, pattern: /^\d{6}$/ });
+  const rows = await query('SELECT totp_secret_encrypted, totp_enabled FROM users WHERE user_id = ?', [req.user.user_id]);
+  if (!rows[0]?.totp_secret_encrypted) throw badRequest('No pending enrollment. Start again.');
+  if (rows[0].totp_enabled) throw badRequest('An authenticator is already enabled.');
+  const secret = decryptText(rows[0].totp_secret_encrypted, config);
+  if (!secret || !verifyTotp(token, secret)) {
+    await writeAudit(req, { actorId: req.user.user_id, action: 'TOTP_ENROLL_VERIFY', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'FAILURE' });
+    throw badRequest('That code is incorrect. Check your authenticator and try again.');
   }
-  if (!credential) throw badRequest('Passkey registration could not be verified.');
-  await execute(
-    `INSERT INTO webauthn_credentials (credential_id, user_id, public_key, counter, transports) VALUES (?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE public_key = VALUES(public_key), counter = VALUES(counter), transports = VALUES(transports)`,
-    [credential.credentialId, req.user.user_id, credential.publicKey, credential.counter, credential.transports || null]
-  );
-  await writeAudit(req, { actorId: req.user.user_id, action: 'WEBAUTHN_REGISTER', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
-  res.status(201).json({ registered: true });
+  await execute('UPDATE users SET totp_enabled = TRUE, totp_enrolled_at = NOW() WHERE user_id = ?', [req.user.user_id]);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'TOTP_ENABLE', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  // Confirming enrollment is a fresh proof of possession: refresh the session so it satisfies
+  // requireRecentReauth, exactly like an MFA re-auth.
+  const now = currentUnixSeconds();
+  const full = await getUserById(req.user.user_id);
+  res.status(200).json({ enabled: true, ...issueSession(req, res, full, { reauth_at: now, mfa_at: now }) });
 }
 
-async function webauthnAuthenticateOptions(req, res) {
-  const creds = await getUserCredentials(req.user.user_id);
-  if (creds.length === 0) throw badRequest('No passkey registered for this account.');
-  const options = await authenticationOptions(webauthnRp, creds);
-  await storeWebauthnChallenge(req.user.user_id, options.challenge);
-  res.status(200).json(options);
-}
-
-async function webauthnAuthenticateVerify(req, res) {
-  const expectedChallenge = await takeWebauthnChallenge(req.user.user_id);
-  if (!expectedChallenge) throw badRequest('No active authentication challenge. Start again.');
-  const used = (await getUserCredentials(req.user.user_id)).find((c) => c.credential_id === req.body.id);
-  if (!used) throw badRequest('Unknown passkey for this account.');
-  let verification = { verified: false };
-  try {
-    verification = await verifyAuthentication(webauthnRp, req.body, expectedChallenge, used);
-  } catch {
-    verification = { verified: false };
+// Step-up: an enrolled user submits a current code to strongly re-authenticate.
+async function totpStepUp(req, res) {
+  const token = assertString(req.body.token, 'token', { min: 6, max: 6, pattern: /^\d{6}$/ });
+  const rows = await query('SELECT totp_secret_encrypted, totp_enabled FROM users WHERE user_id = ?', [req.user.user_id]);
+  if (!rows[0]?.totp_enabled || !rows[0]?.totp_secret_encrypted) throw badRequest('No authenticator is enabled for this account.');
+  const secret = decryptText(rows[0].totp_secret_encrypted, config);
+  if (!secret || !verifyTotp(token, secret)) {
+    await writeAudit(req, { actorId: req.user.user_id, action: 'TOTP_STEPUP', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'FAILURE' });
+    throw forbidden('Authenticator verification failed.');
   }
-  if (!verification.verified) throw forbidden('Passkey verification failed.');
-  // Advance the signature counter (authenticator clone detection).
-  await execute('UPDATE webauthn_credentials SET counter = ? WHERE credential_id = ?', [verification.authenticationInfo.newCounter, used.credential_id]);
-  await writeAudit(req, { actorId: req.user.user_id, action: 'WEBAUTHN_STEPUP', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
-  // A verified passkey assertion is a strong (phishing-resistant) re-authentication: refresh
-  // the session so it satisfies requireRecentReauth, exactly like an MFA re-auth.
+  await writeAudit(req, { actorId: req.user.user_id, action: 'TOTP_STEPUP', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
   const now = currentUnixSeconds();
   const full = await getUserById(req.user.user_id);
   res.status(200).json({ verified: true, ...issueSession(req, res, full, { reauth_at: now, mfa_at: now }) });
 }
 
-async function webauthnListCredentials(req, res) {
-  const creds = await query('SELECT credential_id, transports, created_at FROM webauthn_credentials WHERE user_id = ?', [req.user.user_id]);
-  res.status(200).json(creds.map((c) => ({ credentialId: c.credential_id, transports: c.transports, createdAt: c.created_at })));
+// Disable: requires a valid current code (proof of possession) to remove the authenticator.
+async function totpDisable(req, res) {
+  const token = assertString(req.body.token, 'token', { min: 6, max: 6, pattern: /^\d{6}$/ });
+  const rows = await query('SELECT totp_secret_encrypted, totp_enabled FROM users WHERE user_id = ?', [req.user.user_id]);
+  if (!rows[0]?.totp_enabled || !rows[0]?.totp_secret_encrypted) throw badRequest('No authenticator is enabled for this account.');
+  const secret = decryptText(rows[0].totp_secret_encrypted, config);
+  if (!secret || !verifyTotp(token, secret)) {
+    await writeAudit(req, { actorId: req.user.user_id, action: 'TOTP_DISABLE', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'FAILURE' });
+    throw forbidden('Authenticator verification failed.');
+  }
+  await execute('UPDATE users SET totp_secret_encrypted = NULL, totp_enabled = FALSE, totp_enrolled_at = NULL WHERE user_id = ?', [req.user.user_id]);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'TOTP_DISABLE', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  res.status(200).json({ enabled: false });
 }
 
 async function listMessages(req, res) {
