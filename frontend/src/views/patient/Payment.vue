@@ -105,8 +105,13 @@ const payNow = async (item) => {
       method: 'POST',
       body: JSON.stringify({ consultationId: item.consultationId }),
     })
+    // Real Stripe test-mode Checkout: redirect to the hosted page (pay with test card 4242…).
+    if (data.provider === 'stripe' && data.checkoutUrl) {
+      window.location.href = data.checkoutUrl
+      return
+    }
+    // Demo mode (no Stripe key): show the created-checkout reference instead of navigating.
     checkoutRefs[item.consultationId] = data.checkoutReference
-    if (data.checkoutUrl) window.open(data.checkoutUrl, '_blank', 'noopener,noreferrer')
   } catch (err) {
     error.value = err.message || 'Could not start checkout.'
   } finally {
