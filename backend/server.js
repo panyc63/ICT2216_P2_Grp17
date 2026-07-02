@@ -494,13 +494,13 @@ async function registerPatient(req, res) {
     message: 'User registered successfully. Please verify your email address.',
     user: { user_id: userId, role: 'Patient', status: 'PendingVerification' },
   };
-  // Demo / self-hosted recovery: ONLY when no email provider is configured (sendMail was
-  // skipped) do we surface the verification link so the account can still be activated. We
-  // log it for the operator AND return it in the response. This is gated to the no-email
-  // case: once a real RESEND_API_KEY is set, verification tokens are NEVER leaked in the API
-  // response or logs.
-  if (mailResult.skipped) {
-    console.info(`[email] account-verification link (demo mode) for ${email}: ${verificationUrl}`);
+  // Verification must never dead-end. If the email was NOT actually delivered — either no
+  // provider is configured (skipped) OR a configured provider failed (e.g. bad SMTP creds,
+  // sender not verified, provider still activating) — log the link for the operator AND return
+  // it so the account can still be activated. Once email reliably delivers, this field is
+  // absent and no token is exposed. (Reset stays anti-enumeration and never returns its token.)
+  if (mailResult.skipped || mailResult.delivered === false) {
+    console.info(`[email] account-verification link for ${email} (email not delivered): ${verificationUrl}`);
     responseBody.verificationUrl = verificationUrl;
   }
 
