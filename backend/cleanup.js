@@ -28,9 +28,6 @@ export const CLEANUP_TASKS = [
   // Orphaned recording sessions that started but never ended (hung calls) after 6 hours.
   { label: 'orphaned_recordings',
     sql: "DELETE FROM recording_sessions WHERE ended_at IS NULL AND started_at < (NOW() - INTERVAL 6 HOUR)" },
-  // Abandoned WebAuthn ceremony challenges (single-use, 5-minute window).
-  { label: 'expired_webauthn_challenges',
-    sql: "DELETE FROM webauthn_challenges WHERE expires_at < NOW()" },
 ];
 
 // Runs every task once; returns a { label: affectedRows | 'error: ...' } summary.

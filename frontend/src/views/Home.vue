@@ -1,85 +1,118 @@
 <template>
-  <div class="min-h-screen bg-white flex flex-col font-sans text-slate-800">
+  <div class="flex-1 flex flex-col bg-white font-sans text-slate-800">
     <!-- Hero -->
-    <section class="px-4 pt-16 pb-14 sm:pt-20 sm:pb-16 bg-gradient-to-b from-indigo-50/60 to-white">
-      <div class="max-w-3xl mx-auto text-center">
-        <h1 class="text-4xl sm:text-5xl font-extrabold text-slate-900 tracking-tight leading-tight mb-5">
-          See a doctor by secure video — <span class="text-indigo-600">without leaving home.</span>
+    <section class="relative overflow-hidden bg-gradient-to-b from-indigo-50 via-indigo-50/40 to-white">
+      <div class="absolute inset-0 opacity-[0.06] bg-dot-grid [background-size:22px_22px]" aria-hidden="true"></div>
+      <div class="relative max-w-3xl mx-auto text-center px-4 pt-16 pb-16 sm:pt-24 sm:pb-20 animate-fade-up">
+        <span class="inline-flex items-center gap-2 text-xs font-semibold text-indigo-700 bg-white border border-indigo-100 shadow-sm px-3.5 py-1.5 rounded-full mb-6">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+          Secure online clinic
+        </span>
+        <h1 class="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-slate-900 tracking-tight leading-[1.1] mb-5">
+          See a doctor by secure video —
+          <span class="text-indigo-600">without leaving home.</span>
         </h1>
-        <p class="text-lg text-slate-600 max-w-2xl mx-auto mb-8">
+        <p class="text-lg text-slate-600 max-w-2xl mx-auto mb-8 leading-relaxed">
           MediFlow is an online clinic. Answer a few questions about your symptoms, talk to a doctor by
-          chat or video, and get your prescription or medical certificate the same day — with medication
-          delivered to your door or ready to collect.
+          chat or video, and receive your prescription or medical certificate — with medication delivered
+          to your door or ready to collect.
         </p>
-        <div class="flex flex-col sm:flex-row justify-center gap-3">
-          <router-link to="/register" class="bg-indigo-600 text-white px-7 py-3 rounded-lg font-semibold shadow-sm hover:bg-indigo-700 transition-colors">
+        <div class="flex flex-col sm:flex-row justify-center items-center gap-3">
+          <router-link
+            to="/register"
+            class="w-full sm:w-auto bg-indigo-600 text-white px-7 py-3.5 rounded-xl font-semibold shadow-sm hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5 transition-all"
+          >
             Create an account
           </router-link>
-          <router-link to="/login" class="bg-white border border-slate-300 text-slate-800 px-7 py-3 rounded-lg font-semibold hover:bg-slate-50 transition-colors">
+          <router-link
+            to="/login"
+            class="w-full sm:w-auto bg-white border border-slate-300 text-slate-800 px-7 py-3.5 rounded-xl font-semibold hover:bg-slate-50 hover:-translate-y-0.5 transition-all"
+          >
             Sign in
           </router-link>
-          <a href="#how-it-works" class="text-indigo-700 px-4 py-3 rounded-lg font-semibold hover:underline self-center">
-            How it works ↓
-          </a>
         </div>
+        <a href="#how-it-works" class="inline-block text-indigo-700 mt-6 text-sm font-semibold hover:underline">
+          See how it works ↓
+        </a>
         <p class="text-xs text-slate-500 mt-6">
-          Typical wait under 15 minutes · Open every day · No app download needed
+          Chat or video from your browser · No app download needed
         </p>
       </div>
     </section>
 
     <!-- Trust strip -->
-    <section aria-label="What makes MediFlow safe" class="border-y border-slate-100 bg-slate-50">
-      <div class="max-w-5xl mx-auto px-6 py-6 grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-        <div><p class="text-sm font-bold text-slate-900">🔒 Encrypted video</p><p class="text-xs text-slate-500 mt-1">Calls are peer-to-peer &amp; encrypted</p></div>
-        <div><p class="text-sm font-bold text-slate-900">🩺 Real doctors</p><p class="text-xs text-slate-500 mt-1">Consult a licensed practitioner</p></div>
-        <div><p class="text-sm font-bold text-slate-900">📄 Verifiable MCs</p><p class="text-xs text-slate-500 mt-1">Digitally signed, QR-checkable</p></div>
-        <div><p class="text-sm font-bold text-slate-900">🛡️ Your data, protected</p><p class="text-xs text-slate-500 mt-1">Records encrypted at rest</p></div>
+    <section aria-label="What makes MediFlow safe" class="border-y border-slate-200 bg-slate-50">
+      <div class="max-w-5xl mx-auto px-6 py-8 grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
+        <div v-for="item in trust" :key="item.title">
+          <p class="text-sm font-bold text-slate-900">{{ item.icon }} {{ item.title }}</p>
+          <p class="text-xs text-slate-500 mt-1">{{ item.body }}</p>
+        </div>
       </div>
     </section>
 
     <!-- How it works -->
-    <section id="how-it-works" class="max-w-5xl mx-auto px-6 py-16 scroll-mt-24">
-      <div class="text-center mb-10">
-        <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight">How it works</h2>
-        <p class="text-slate-500 mt-2">Four steps from symptom to treatment.</p>
+    <section id="how-it-works" class="max-w-5xl mx-auto px-6 py-16 sm:py-20 scroll-mt-24 w-full">
+      <div class="text-center mb-12">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">How it works</h2>
+        <p class="text-slate-500 mt-3">Four steps from symptom to treatment.</p>
       </div>
-      <ol class="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <li v-for="step in steps" :key="step.n" class="bg-white border border-slate-200 rounded-xl p-6">
-          <div class="w-9 h-9 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center mb-4">{{ step.n }}</div>
-          <h3 class="font-bold text-slate-900 mb-1">{{ step.title }}</h3>
-          <p class="text-sm text-slate-500">{{ step.body }}</p>
+      <ol class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
+        <li
+          v-for="step in steps"
+          :key="step.n"
+          class="relative bg-white border border-slate-200 rounded-2xl p-6 shadow-soft hover:shadow-card-hover hover:-translate-y-0.5 transition-all"
+        >
+          <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center mb-4">{{ step.n }}</div>
+          <h3 class="font-bold text-slate-900 mb-1.5">{{ step.title }}</h3>
+          <p class="text-sm text-slate-500 leading-relaxed">{{ step.body }}</p>
         </li>
       </ol>
-      <div class="text-center mt-10">
-        <router-link to="/register" class="inline-block bg-indigo-600 text-white px-7 py-3 rounded-lg font-semibold shadow-sm hover:bg-indigo-700 transition-colors">
+      <div class="text-center mt-12">
+        <router-link
+          to="/register"
+          class="inline-block bg-indigo-600 text-white px-7 py-3.5 rounded-xl font-semibold shadow-sm hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5 transition-all"
+        >
           Start a consultation
         </router-link>
       </div>
     </section>
 
     <!-- What you can do -->
-    <section class="bg-slate-50 border-t border-slate-100">
-      <div class="max-w-5xl mx-auto px-6 py-16">
-        <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight text-center mb-10">Everything in one place</h2>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div v-for="f in features" :key="f.title" class="bg-white border border-slate-200 rounded-xl p-6">
-            <div class="text-2xl mb-3" aria-hidden="true">{{ f.icon }}</div>
+    <section class="bg-slate-50 border-t border-slate-200">
+      <div class="max-w-5xl mx-auto px-6 py-16 sm:py-20">
+        <div class="text-center mb-12">
+          <h2 class="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">Everything in one place</h2>
+          <p class="text-slate-500 mt-3">From first symptom to the medicine in your hand.</p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+          <div
+            v-for="f in features"
+            :key="f.title"
+            class="bg-white border border-slate-200 rounded-2xl p-6 shadow-soft hover:shadow-card-hover hover:-translate-y-0.5 transition-all"
+          >
+            <div class="w-11 h-11 rounded-xl bg-indigo-50 flex items-center justify-center text-2xl mb-4" aria-hidden="true">{{ f.icon }}</div>
             <h3 class="font-bold text-slate-900 mb-1.5">{{ f.title }}</h3>
-            <p class="text-sm text-slate-500">{{ f.body }}</p>
+            <p class="text-sm text-slate-500 leading-relaxed">{{ f.body }}</p>
           </div>
         </div>
       </div>
     </section>
 
     <!-- Staff -->
-    <section class="max-w-5xl mx-auto px-6 py-14">
-      <div class="bg-indigo-600 rounded-2xl px-8 py-10 text-white flex flex-col md:flex-row items-center justify-between gap-6">
-        <div>
-          <h2 class="text-2xl font-bold mb-1">Clinic staff?</h2>
-          <p class="text-indigo-100 text-sm max-w-xl">Doctors, nurses, pharmacists and administrators sign in to the same portal to manage the triage queue, run consultations, issue prescriptions and certificates, and dispense medication.</p>
+    <section class="max-w-5xl mx-auto px-6 py-16 w-full">
+      <div class="relative overflow-hidden bg-brand-gradient rounded-3xl px-8 py-10 sm:px-10 text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-glow">
+        <div class="absolute inset-0 opacity-10 bg-dot-grid [background-size:20px_20px]" aria-hidden="true"></div>
+        <div class="relative">
+          <h2 class="text-2xl font-bold mb-2">Clinic staff?</h2>
+          <p class="text-indigo-100 text-sm max-w-xl leading-relaxed">
+            Doctors, nurses, pharmacists and administrators sign in to the same portal to manage the triage
+            queue, run consultations, issue prescriptions and certificates, and dispense medication.
+          </p>
         </div>
-        <router-link to="/login" class="bg-white text-indigo-700 px-6 py-3 rounded-lg font-semibold hover:bg-indigo-50 transition-colors whitespace-nowrap">
+        <router-link
+          to="/login"
+          class="relative bg-white text-indigo-700 px-6 py-3 rounded-xl font-semibold hover:bg-indigo-50 transition-colors whitespace-nowrap shadow-sm"
+        >
           Staff sign in
         </router-link>
       </div>
@@ -87,29 +120,33 @@
 
     <!-- Footer -->
     <footer class="mt-auto border-t border-slate-200 bg-white">
-      <div class="max-w-5xl mx-auto px-6 py-10 grid grid-cols-1 sm:grid-cols-3 gap-8 text-sm">
+      <div class="max-w-5xl mx-auto px-6 py-12 grid grid-cols-1 sm:grid-cols-3 gap-8 text-sm">
         <div>
           <p class="text-lg font-extrabold text-indigo-600 mb-2">MediFlow</p>
-          <p class="text-slate-500">Secure telehealth for everyday care — consultations, prescriptions, medical certificates and medication delivery.</p>
+          <p class="text-slate-500 leading-relaxed">
+            Secure telehealth for everyday care — consultations, prescriptions, medical certificates and
+            medication delivery.
+          </p>
         </div>
         <div>
           <p class="font-semibold text-slate-900 mb-3">Explore</p>
           <ul class="space-y-2 text-slate-500">
-            <li><router-link to="/about" class="hover:text-indigo-600">About us</router-link></li>
-            <li><router-link to="/services" class="hover:text-indigo-600">Services</router-link></li>
-            <li><router-link to="/contact" class="hover:text-indigo-600">Contact us</router-link></li>
+            <li><router-link to="/about" class="hover:text-indigo-600 transition-colors">About us</router-link></li>
+            <li><router-link to="/services" class="hover:text-indigo-600 transition-colors">Services</router-link></li>
+            <li><router-link to="/contact" class="hover:text-indigo-600 transition-colors">Contact us</router-link></li>
           </ul>
         </div>
         <div>
           <p class="font-semibold text-slate-900 mb-3">Get in touch</p>
           <ul class="space-y-2 text-slate-500">
             <li>11 New Punggol Rd, Singapore 828616</li>
-            <li><a href="mailto:enquiries@mediflow.com" class="hover:text-indigo-600">enquiries@mediflow.com</a></li>
+            <li><a href="mailto:enquiries@mediflow.com" class="hover:text-indigo-600 transition-colors">enquiries@mediflow.com</a></li>
           </ul>
         </div>
       </div>
-      <div class="border-t border-slate-100 py-4 text-center text-xs text-slate-400">
-        © {{ year }} MediFlow. For non-emergencies only — in an emergency, call 995.
+      <div class="border-t border-slate-100 py-5 px-6 text-center text-xs text-slate-400 space-y-1">
+        <p>© {{ year }} MediFlow. For non-emergencies only — in an emergency, call 995.</p>
+        <p>A student project built for ICT2216 Secure Software Development. Not a real clinical service.</p>
       </div>
     </footer>
   </div>
@@ -117,6 +154,13 @@
 
 <script setup>
 const year = new Date().getFullYear()
+
+const trust = [
+  { icon: '🔒', title: 'Encrypted video', body: 'Browser-to-browser calls, encrypted in transit' },
+  { icon: '🩺', title: 'Talk to a doctor', body: 'Consult by secure chat or video' },
+  { icon: '📄', title: 'Verifiable MCs', body: 'Digitally signed, QR-checkable' },
+  { icon: '🛡️', title: 'Data protected', body: 'Clinical records encrypted at rest' },
+]
 
 const steps = [
   { n: 1, title: 'Register & describe symptoms', body: 'Create an account and complete a short pre-consultation questionnaire. It sets your priority automatically.' },
