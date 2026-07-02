@@ -71,22 +71,31 @@ echo "== MediFlow post-deploy smoke test =="
 echo "compose file: ${COMPOSE_FILE}  env file: ${ENV_FILE}"
 echo
 
-# 1. Required containers running + healthy.
-echo "[1/4] Checking required containers are running and healthy..."
+# 1. Required containers running + healthy. Freshly recreated containers spend their
+# healthcheck start-period in "starting" right after `up -d` (the backend's first check only
+# fires ~30s in), so POLL until they converge instead of sampling once. Fail fast on a real
+# "unhealthy"; treat "starting"/"missing" as transient until the timeout.
+WAIT_TIMEOUT="${WAIT_TIMEOUT:-150}"
+echo "[1/4] Waiting up to ${WAIT_TIMEOUT}s for required containers to be running and healthy..."
+deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
+while :; do
+  pending=""
+  for service in "${REQUIRED_SERVICES[@]}"; do
+    state="$(container_state "$service")"
+    case "$state" in
+      healthy|none) ;;                                   # good
+      starting|missing) pending="${pending} ${service}(${state})" ;;   # transient — keep waiting
+      *) fail "required service '${service}' is not healthy (state: ${state})" ;;  # unhealthy/unknown
+    esac
+  done
+  [ -z "$pending" ] && break
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    fail "timed out after ${WAIT_TIMEOUT}s waiting for:${pending}"
+  fi
+  sleep 3
+done
 for service in "${REQUIRED_SERVICES[@]}"; do
-  state="$(container_state "$service")"
-  case "$state" in
-    healthy|none)
-      echo "  ok: ${service} (${state})"
-      ;;
-    missing)
-      fail "required service '${service}' is not running (state: ${state})"
-      ;;
-    *)
-      # starting / unhealthy / unknown — not good enough for a passed deploy.
-      fail "required service '${service}' is not healthy (state: ${state})"
-      ;;
-  esac
+  echo "  ok: ${service} ($(container_state "$service"))"
 done
 
 # 1b. Optional containers — warn only, never fail.
