@@ -5,11 +5,12 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test security.test.js turnstile.test.js",
+    "test": "node --test security.test.js turnstile.test.js webauthn.test.js",
     "test:integration": "node --test integration.test.js",
     "audit:prod": "npm audit --omit=dev"
   },
   "dependencies": {
+    "@simplewebauthn/server": "^13.3.2",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.2",

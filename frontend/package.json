@@ -9,6 +9,7 @@
     "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
     "jspdf": "^4.2.1",
     "vue": "^3.5.39",
     "vue-router": "^4.3.0"

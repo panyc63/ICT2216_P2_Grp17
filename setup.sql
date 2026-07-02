@@ -214,6 +214,25 @@ CREATE TABLE signaling_messages (
     INDEX idx_signaling_consultation (consultation_id, signal_id)
 );
 
+-- WebAuthn / FIDO2 passkeys for privileged accounts (Admin/Doctor): a phishing-resistant
+-- step-up factor. Registered authenticators + the transient ceremony challenge.
+CREATE TABLE webauthn_credentials (
+    credential_id VARCHAR(255) PRIMARY KEY,   -- base64url credential ID from the authenticator
+    user_id VARCHAR(36) NOT NULL,
+    public_key TEXT NOT NULL,                 -- base64url COSE public key
+    counter BIGINT NOT NULL DEFAULT 0,        -- signature counter (clone-detection)
+    transports VARCHAR(120) NULL,             -- CSV hint (usb, nfc, ble, internal, hybrid)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    INDEX idx_webauthn_user (user_id)
+);
+CREATE TABLE webauthn_challenges (
+    user_id VARCHAR(36) PRIMARY KEY,          -- one in-flight ceremony per user
+    challenge VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
 CREATE TABLE security_audit_logs (
     log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     actor_id VARCHAR(36) NULL,

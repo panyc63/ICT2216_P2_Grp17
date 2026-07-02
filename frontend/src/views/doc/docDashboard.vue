@@ -87,6 +87,11 @@
 
           </div>
         </div>
+
+        <div>
+          <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Account Security</h3>
+          <PasskeyManager />
+        </div>
       </div>
 
     </main>
@@ -97,6 +102,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { apiFetch, logout } from '../../services/api'
+import PasskeyManager from '../../components/PasskeyManager.vue'
 
 // Grab router instances
 const router = useRouter()

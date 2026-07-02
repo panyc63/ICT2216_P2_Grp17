@@ -59,6 +59,7 @@ import {
 } from './security.js';
 import { scheduleCleanup } from './cleanup.js';
 import { verifyTurnstile } from './turnstile.js';
+import { registrationOptions, verifyRegistration, authenticationOptions, verifyAuthentication } from './webauthn.js';
 
 dotenv.config();
 
@@ -69,6 +70,9 @@ const app = express();
 // client instead of an internal container IP, so per-IP rate limiting keys on the actual
 // caller. (nginx's real_ip config does the equivalent for its own limit_req — see nginx.conf.)
 app.set('trust proxy', 2);
+
+// WebAuthn relying-party parameters (phishing-resistant passkeys for privileged accounts).
+const webauthnRp = { rpID: config.webauthnRpId, rpName: config.webauthnRpName, origin: config.webauthnOrigin };
 
 const db = mysql.createPool({
   host: process.env.DB_HOST,
@@ -192,6 +196,13 @@ app.get('/api/medical-certificates/:id', asyncHandler(authenticate), asyncHandle
 app.get('/api/patient/medical-certificates/latest', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(getLatestPatientMedicalCertificate));
 app.post('/api/medical-certificates/:id/revoke', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), requireRecentReauth, asyncHandler(revokeMedicalCertificate));
 app.get('/api/verify/mc/:token', verificationLimit, asyncHandler(verifyMedicalCertificate));
+
+// WebAuthn / FIDO2 passkeys — phishing-resistant step-up for privileged accounts (Admin/Doctor).
+app.get('/api/webauthn/credentials', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnListCredentials));
+app.post('/api/webauthn/register/options', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnRegisterOptions));
+app.post('/api/webauthn/register/verify', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnRegisterVerify));
+app.post('/api/webauthn/authenticate/options', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnAuthenticateOptions));
+app.post('/api/webauthn/authenticate/verify', asyncHandler(authenticate), requireRole('Admin', 'Doctor'), asyncHandler(webauthnAuthenticateVerify));
 
 app.get('/api/consultations/:id/messages', asyncHandler(authenticate), chatLimit, asyncHandler(listMessages));
 app.post('/api/consultations/:id/messages', asyncHandler(authenticate), chatLimit, asyncHandler(createMessage));
@@ -1362,6 +1373,88 @@ async function verifyMedicalCertificate(req, res) {
     validUntil: mc.valid_until,
     revoked: Boolean(mc.is_revoked),
   });
+}
+
+// --- WebAuthn / FIDO2 passkeys (Admin/Doctor step-up) ---------------------------------
+const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
+async function storeWebauthnChallenge(userId, challenge) {
+  await execute(
+    `INSERT INTO webauthn_challenges (user_id, challenge, expires_at) VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE challenge = VALUES(challenge), expires_at = VALUES(expires_at)`,
+    [userId, challenge, new Date(Date.now() + WEBAUTHN_CHALLENGE_TTL_MS)]
+  );
+}
+
+// Single-use: read the current, unexpired challenge and delete it.
+async function takeWebauthnChallenge(userId) {
+  const rows = await query('SELECT challenge FROM webauthn_challenges WHERE user_id = ? AND expires_at > NOW() LIMIT 1', [userId]);
+  await execute('DELETE FROM webauthn_challenges WHERE user_id = ?', [userId]);
+  return rows[0]?.challenge || null;
+}
+
+async function getUserCredentials(userId) {
+  return query('SELECT credential_id, public_key, counter, transports FROM webauthn_credentials WHERE user_id = ?', [userId]);
+}
+
+async function webauthnRegisterOptions(req, res) {
+  const options = await registrationOptions(webauthnRp, req.user, await getUserCredentials(req.user.user_id));
+  await storeWebauthnChallenge(req.user.user_id, options.challenge);
+  res.status(200).json(options);
+}
+
+async function webauthnRegisterVerify(req, res) {
+  const expectedChallenge = await takeWebauthnChallenge(req.user.user_id);
+  if (!expectedChallenge) throw badRequest('No active registration challenge. Start again.');
+  let credential = null;
+  try {
+    credential = await verifyRegistration(webauthnRp, req.body, expectedChallenge);
+  } catch {
+    credential = null;
+  }
+  if (!credential) throw badRequest('Passkey registration could not be verified.');
+  await execute(
+    `INSERT INTO webauthn_credentials (credential_id, user_id, public_key, counter, transports) VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE public_key = VALUES(public_key), counter = VALUES(counter), transports = VALUES(transports)`,
+    [credential.credentialId, req.user.user_id, credential.publicKey, credential.counter, credential.transports || null]
+  );
+  await writeAudit(req, { actorId: req.user.user_id, action: 'WEBAUTHN_REGISTER', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  res.status(201).json({ registered: true });
+}
+
+async function webauthnAuthenticateOptions(req, res) {
+  const creds = await getUserCredentials(req.user.user_id);
+  if (creds.length === 0) throw badRequest('No passkey registered for this account.');
+  const options = await authenticationOptions(webauthnRp, creds);
+  await storeWebauthnChallenge(req.user.user_id, options.challenge);
+  res.status(200).json(options);
+}
+
+async function webauthnAuthenticateVerify(req, res) {
+  const expectedChallenge = await takeWebauthnChallenge(req.user.user_id);
+  if (!expectedChallenge) throw badRequest('No active authentication challenge. Start again.');
+  const used = (await getUserCredentials(req.user.user_id)).find((c) => c.credential_id === req.body.id);
+  if (!used) throw badRequest('Unknown passkey for this account.');
+  let verification = { verified: false };
+  try {
+    verification = await verifyAuthentication(webauthnRp, req.body, expectedChallenge, used);
+  } catch {
+    verification = { verified: false };
+  }
+  if (!verification.verified) throw forbidden('Passkey verification failed.');
+  // Advance the signature counter (authenticator clone detection).
+  await execute('UPDATE webauthn_credentials SET counter = ? WHERE credential_id = ?', [verification.authenticationInfo.newCounter, used.credential_id]);
+  await writeAudit(req, { actorId: req.user.user_id, action: 'WEBAUTHN_STEPUP', resourceType: 'USER', resourceId: req.user.user_id, outcome: 'SUCCESS' });
+  // A verified passkey assertion is a strong (phishing-resistant) re-authentication: refresh
+  // the session so it satisfies requireRecentReauth, exactly like an MFA re-auth.
+  const now = currentUnixSeconds();
+  const full = await getUserById(req.user.user_id);
+  res.status(200).json({ verified: true, ...issueSession(req, res, full, { reauth_at: now, mfa_at: now }) });
+}
+
+async function webauthnListCredentials(req, res) {
+  const creds = await query('SELECT credential_id, transports, created_at FROM webauthn_credentials WHERE user_id = ?', [req.user.user_id]);
+  res.status(200).json(creds.map((c) => ({ credentialId: c.credential_id, transports: c.transports, createdAt: c.created_at })));
 }
 
 async function listMessages(req, res) {
