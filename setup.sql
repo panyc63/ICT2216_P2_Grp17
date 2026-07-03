@@ -156,6 +156,9 @@ CREATE TABLE medical_certificates (
     diagnosis_encrypted TEXT NULL,
     qr_token_hash VARCHAR(64) NULL UNIQUE,
     signature_hash VARCHAR(64) NULL,
+    -- The full signed verification token (a public, Ed25519-signed credential — not a secret).
+    -- Persisted so the certificate owner's PDF/QR can carry it for third-party verification.
+    verification_token TEXT NULL,
     is_revoked BOOLEAN DEFAULT FALSE,
     revoked_at TIMESTAMP NULL DEFAULT NULL,
     FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE RESTRICT,
@@ -253,12 +256,12 @@ END//
 DELIMITER ;
 
 INSERT INTO users (user_id, name, email, password_hash, role, is_verified, status, last_login) VALUES
-('MH-U001', 'System Administrator', 'admin@mediflow.com', 'scrypt$16384$8$1$admin-seed-salt01$GOnOZV4v-lh6jU2TvUDOdpXSnlMd-QCLO22r6pGYFqC72EdtkQXWkx82z-xJ9rN2P7UvRATjMyhabgqx3s6a9Q', 'Admin', TRUE, 'Active', CURRENT_TIMESTAMP),
-('MH-U002', 'Dr. Alex Rivera', 'doctor@mediflow.com', 'scrypt$16384$8$1$doctor-seed-salt1$ux84p6uNPYUfW6dNC47P17AxC6u0W7Hai_STCnhftKxlgLckC0kbLzt_OkQ989AjHwWbeJ61QsurvFZjKMJW3Q', 'Doctor', TRUE, 'Active', CURRENT_TIMESTAMP),
-('MH-U003', 'Nurse Sarah Jenkins', 'nurse@mediflow.com', 'scrypt$16384$8$1$nurse-seed-salt01$Uvg01M3J0tUXPC5GSh5E-2LG287UKjX09eXomww7SRO6dwELNKHaHKHFDWzV6s_QJJjPdxCYddbsV_z_U_XiHw', 'Nurse', TRUE, 'Active', CURRENT_TIMESTAMP),
-('MH-U004', 'Pharmacist David Vance', 'pharmacy@mediflow.com', 'scrypt$16384$8$1$pharm-seed-salt01$x-oR9dDVw3bJTcP134Jj3VT0Ntjmw2OINP4wy7Wjy3xKC0fLQacqYht4WdUUYalkH4BZo4hRKkx07pKfRCagdw', 'Pharmacist', TRUE, 'Active', CURRENT_TIMESTAMP),
-('MH-U005', 'Jane Doe', 'jane@gmail.com', 'scrypt$16384$8$1$jane-seed-salt001$PPEtYF3U3hU19lkX40Gd7X12PIyaFlbm2yg7ZAAr6k-VZM5WirDUaHYgmbogECmFJjSJzvlYiJPf_IfN1zjO-Q', 'Patient', FALSE, 'PendingVerification', NULL),
-('MH-U006', 'John Smith', 'john@gmail.com', 'scrypt$16384$8$1$john-seed-salt001$WgHLk8E45CFFGpKv_D9irMhv9zawYu3V2rSqSvaNnLGUAY0pOUXoUm1ZYzOox57KU5-haAXJZay7QuB9Y59rHg', 'Patient', TRUE, 'Active', CURRENT_TIMESTAMP);
+('MH-U001', 'System Administrator', 'admin@mediflow.com', 'scrypt$16384$8$1$kJ3_E1nd8f6EdGmMEQ2NxQ$7YLCvySJXrVJnT09_vPRGNY3b1IbF0Yuar1vpV3iheDPrFL5ZkYhUINELgsVw2KtN6geq6EDp_ACjHs9nBVzvg', 'Admin', TRUE, 'Active', CURRENT_TIMESTAMP),
+('MH-U002', 'Dr. Alex Rivera', 'doctor@mediflow.com', 'scrypt$16384$8$1$rTxFhGcWNJvwGxDAENNi7A$-BUiLjUgyJaueesqLnOaJD34cYqofOGuFb2VooqfWHlV_6xU1mKyvYmYbbVwd2KO1C5PqtgPDe5K2ilkWW68Nw', 'Doctor', TRUE, 'Active', CURRENT_TIMESTAMP),
+('MH-U003', 'Nurse Sarah Jenkins', 'nurse@mediflow.com', 'scrypt$16384$8$1$NTI8EEB5m9FPCXyEcv0JyQ$cjooYB_kS4pVwMVPDCrjAGAufvgd94cuvTCxRFZjzCFOx_yTHa2GFW8ezU8cfZ0bBnG_f4NoFoGAOq_2jlaKFQ', 'Nurse', TRUE, 'Active', CURRENT_TIMESTAMP),
+('MH-U004', 'Pharmacist David Vance', 'pharmacy@mediflow.com', 'scrypt$16384$8$1$A93ZSkV_qqZFoQFDXIilOA$mwQk3Y8TFE2VdsOI0j-68ai2iSDKq9XipEUeINe8AcCuaHRkKcyCWT4X4Z3EyqjSg9dm5OkDq2rYKDLi4Br10A', 'Pharmacist', TRUE, 'Active', CURRENT_TIMESTAMP),
+('MH-U005', 'Jane Doe', 'jane@gmail.com', 'scrypt$16384$8$1$r_JJt3CrS95CP3T1P3_6vg$PY3rT8I6yjzwQSDNL4qtxj8kfFjkoReM4dsEnQFffLC9Xj9pK5eVMHGtiybwMrCW33AcSdWDajvhh9vV4sJokQ', 'Patient', FALSE, 'PendingVerification', NULL),
+('MH-U006', 'John Smith', 'john@gmail.com', 'scrypt$16384$8$1$f7dLX5rgFgy7pFn-G8Weiw$08ly3TO6q1oWBU4EG4OgkqiOxfNHKbc6mGz4OcWJMM_kwpu3pVrsjwmRnNGGxAWu2YUDzLeTdp7fFhZlFzfuHA', 'Patient', TRUE, 'Active', CURRENT_TIMESTAMP);
 
 INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status, completed_at) VALUES
 ('MH-C001', 'MH-U006', 'MH-U002', 'Completed', CURRENT_TIMESTAMP),

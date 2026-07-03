@@ -132,36 +132,41 @@ test('staff onboarding is restricted to workplace email domains', async () => {
 });
 
 // --- Account verification (demo mode: no email provider) ------------------
-test('registration returns a verification link when email delivery is unavailable, and that link activates the account', async () => {
+test('registration returns a verification OTP when email is unavailable; the code (or a resent one) activates the account', async () => {
   const email = `itest-verify-${Date.now()}@example.com`;
   const password = 'Password123!';
   await db.execute('DELETE FROM users WHERE email = ?', [email]).catch(() => {});
   const csrf = await getCsrf();
 
-  // The harness runs with no RESEND_API_KEY (transporter null), so registration must surface
-  // the verification link in the response so the account can still be activated.
+  // The harness runs with no mail provider, so registration surfaces the 6-digit code (demo mode).
   const register = await api('/api/register', { method: 'POST', csrf, body: { name: 'Verify Me', email, password } });
   assert.equal(register.status, 201);
   const body = await register.json();
   assert.equal(body.user.status, 'PendingVerification');
-  assert.ok(typeof body.verificationUrl === 'string', 'expected a verificationUrl in the response');
-  assert.ok(body.verificationUrl.includes('/api/verify-email/'), `unexpected verificationUrl: ${body.verificationUrl}`);
+  assert.match(body.devOtp, /^\d{6}$/);
 
   // Login is blocked until the email is verified.
-  const preVerifyLogin = await api('/api/login', { method: 'POST', csrf: await getCsrf(), body: { email, password } });
-  assert.equal(preVerifyLogin.status, 403);
+  assert.equal((await api('/api/login', { method: 'POST', csrf: await getCsrf(), body: { email, password } })).status, 403);
 
-  // Hitting the returned link's token activates the account (status flips to Active).
-  const verifyPath = new URL(body.verificationUrl).pathname;
-  const verify = await api(verifyPath);
+  // A wrong code is rejected.
+  assert.equal((await api('/api/verify-email', { method: 'POST', csrf: await getCsrf(), body: { email, code: '000000' } })).status, 400);
+
+  // Resending issues a NEW code (the old one is invalidated); the new code activates the account.
+  const resend = await api('/api/verify-email/resend', { method: 'POST', csrf: await getCsrf(), body: { email } });
+  assert.equal(resend.status, 200);
+  const newOtp = (await resend.json()).devOtp;
+  assert.match(newOtp, /^\d{6}$/);
+  // The original code no longer works after a resend.
+  assert.equal((await api('/api/verify-email', { method: 'POST', csrf: await getCsrf(), body: { email, code: body.devOtp } })).status, 400);
+
+  const verify = await api('/api/verify-email', { method: 'POST', csrf: await getCsrf(), body: { email, code: newOtp } });
   assert.equal(verify.status, 200);
   const [rows] = await db.execute('SELECT status, is_verified FROM users WHERE email = ?', [email]);
   assert.equal(rows[0].status, 'Active');
   assert.equal(Number(rows[0].is_verified), 1);
 
   // And login now succeeds for the (Patient, MFA-not-required) account.
-  const postVerifyLogin = await api('/api/login', { method: 'POST', csrf: await getCsrf(), body: { email, password } });
-  assert.equal(postVerifyLogin.status, 200);
+  assert.equal((await api('/api/login', { method: 'POST', csrf: await getCsrf(), body: { email, password } })).status, 200);
 
   await db.execute('DELETE FROM users WHERE email = ?', [email]).catch(() => {});
 });
@@ -333,25 +338,20 @@ test('consultation lifecycle: patient books, doctor claims/starts/completes', as
   assert.equal(booked.status, 201);
   const { consultationId } = await booked.json();
 
-  try {
-    const mine = await (await api('/api/consultations', { session: patient })).json();
-    assert.equal(mine.some((c) => c.consultation_id === consultationId), true);
+  const mine = await (await api('/api/consultations', { session: patient })).json();
+  assert.equal(mine.some((c) => c.consultation_id === consultationId), true);
 
-    // RBAC: a patient cannot drive the clinical state machine.
-    const patientPatch = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: patient, csrf, body: { action: 'start' } });
-    assert.equal(patientPatch.status, 403);
+  // RBAC: a patient cannot drive the clinical state machine.
+  const patientPatch = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: patient, csrf, body: { action: 'start' } });
+  assert.equal(patientPatch.status, 403);
 
-    for (const action of ['claim', 'start', 'complete']) {
-      const r = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action } });
-      assert.equal(r.status, 200);
-    }
-    const [rows] = await db.execute('SELECT doctor_id, session_status FROM consultations WHERE consultation_id = ?', [consultationId]);
-    assert.equal(rows[0].doctor_id, SEED_DOCTOR.user_id);
-    assert.equal(rows[0].session_status, 'Completed');
-  } finally {
-    // Clean up the leaked consultation so it doesn't break the payment test later
-    await db.execute('DELETE FROM consultations WHERE consultation_id = ?', [consultationId]);
+  for (const action of ['claim', 'start', 'complete']) {
+    const r = await api(`/api/consultations/${consultationId}`, { method: 'PATCH', session: doctor, csrf, body: { action } });
+    assert.equal(r.status, 200);
   }
+  const [rows] = await db.execute('SELECT doctor_id, session_status FROM consultations WHERE consultation_id = ?', [consultationId]);
+  assert.equal(rows[0].doctor_id, SEED_DOCTOR.user_id);
+  assert.equal(rows[0].session_status, 'Completed');
 });
 
 test('object-level: a doctor cannot act on a consultation assigned to another doctor', async () => {
@@ -417,9 +417,12 @@ test('payment: fee is charged only for a real unpaid consultation, and the amoun
   // (c) Checkout is refused when there is nothing due (no empty Pending row is created).
   assert.equal((await api('/api/payments/checkout', { method: 'POST', session: patient, csrf, body: {} })).status, 400);
 
-  // (d) Outstanding is empty when the patient has no unpaid, doctor-engaged consultation.
+  // (d) The consultation we are about to create is not already in the outstanding list. (We do
+  // not assert the list is empty: other tests in this shared-DB suite legitimately leave the
+  // seed patient with their own unpaid consultations.)
   const before = await (await api('/api/patient/outstanding', { session: patient })).json();
-  assert.equal(before.outstanding.length, 0);
+  assert.ok(Array.isArray(before.outstanding));
+  assert.equal(before.outstanding.some((o) => o.consultationId === 'MH-CPAYTEST'), false);
 
   // Set up a real, unpaid, doctor-engaged consultation for this patient.
   await db.execute("INSERT INTO consultations (consultation_id, patient_id, doctor_id, session_status) VALUES ('MH-CPAYTEST','MH-U006','MH-U002','Completed')");
@@ -508,8 +511,10 @@ test('MC is signed with the doctor key and publicly verifiable; tamper fails', a
     body: { consultationId: 'MH-C001', patientId: 'MH-U006', diagnosis: 'Acute viral pharyngitis', validUntil: '2030-01-01' },
   });
   assert.equal(issued.status, 201);
-  const { verificationToken } = await issued.json();
+  const created = await issued.json();
+  const { verificationToken, mcId, verifyUrl } = created;
   assert.ok(verificationToken && verificationToken.includes('.'));
+  assert.ok(verifyUrl && verifyUrl.includes(`/verify-mc?mc=${encodeURIComponent(mcId)}`));
 
   // Public QR verification succeeds and returns only minimal, non-PHI fields.
   const ok = await api(`/api/verify/mc/${verificationToken}`);
@@ -518,9 +523,23 @@ test('MC is signed with the doctor key and publicly verifiable; tamper fails', a
   assert.equal(body.valid, true);
   assert.equal('diagnosis' in body, false);
 
+  // The signed token is persisted, and the short mcId path (what the QR uses) verifies too.
+  const [tokRows] = await db.execute('SELECT verification_token FROM medical_certificates WHERE mc_id = ?', [mcId]);
+  assert.equal(tokRows[0].verification_token, verificationToken);
+  const byId = await api(`/api/verify/mc-id/${encodeURIComponent(mcId)}`);
+  assert.equal(byId.status, 200);
+  assert.equal((await byId.json()).valid, true);
+
   // A tampered token must fail (different hash -> no match, or bad signature).
   const tampered = await api(`/api/verify/mc/${verificationToken}x`);
   assert.ok([400, 404].includes(tampered.status));
+
+  // After revocation, both verify paths report revoked / not valid.
+  await api(`/api/medical-certificates/${mcId}/revoke`, { method: 'POST', session: doctor, csrf });
+  const afterId = await api(`/api/verify/mc-id/${encodeURIComponent(mcId)}`);
+  const afterBody = await afterId.json();
+  assert.equal(afterBody.valid, false);
+  assert.equal(afterBody.revoked, true);
 
   // The doctor now has a stored public key (private key is encrypted at rest).
   const [rows] = await db.execute('SELECT mc_public_key, mc_private_key_encrypted FROM users WHERE user_id = ?', [SEED_DOCTOR.user_id]);

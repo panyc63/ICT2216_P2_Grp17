@@ -12,7 +12,7 @@
 
       <nav class="space-y-1 flex-1">
         <button @click="router.push({ name: 'DocDashboard' })" :class="[route.name === 'DocDashboard' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>🏠</span> Dashboard Home</button>
-        <button @click="router.push({ name: 'DocConsult' })" :class="[route.name === 'DocConsult' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>🎥</span> Live Stream Rooms</button>
+        <button @click="router.push({ name: 'DocConsult' })" :class="[route.name === 'DocConsult' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>🎥</span> Video Consultations</button>
         <button @click="router.push({ name: 'DocPrescribe' })" :class="[route.name === 'DocPrescribe' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800']" class="w-full text-left px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center gap-2"><span>📝</span> Rx Prescriptions</button>
       </nav>
       

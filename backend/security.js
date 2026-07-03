@@ -34,6 +34,11 @@ export function getConfig() {
     dataEncryptionKey: requireSecret('DATA_ENCRYPTION_KEY', 'dev-only-change-data-key-32-bytes-minimum'),
     mcSigningKey: requireSecret('MC_SIGNING_KEY', 'dev-only-change-mc-signing-key-32-bytes-minimum'),
     stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+    // Stripe Checkout for the payment demo. Use a TEST secret key (sk_test_…) so no real charge
+    // is ever made. Unset => a local stub URL is returned instead (nothing breaks without keys).
+    stripeSecretKey: process.env.STRIPE_SECRET_KEY || '',
+    stripeSuccessUrl: process.env.STRIPE_SUCCESS_URL || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/patient/payment?checkout=success`,
+    stripeCancelUrl: process.env.STRIPE_CANCEL_URL || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/patient/payment?checkout=cancelled`,
     // Email delivery: a generic SMTP provider (Brevo, Gmail app-password, SendGrid, …) takes
     // precedence when SMTP_HOST is set; RESEND_API_KEY is kept as a fallback shortcut. When
     // neither is set the app runs in demo mode (verification links surfaced in the API response).

@@ -82,25 +82,10 @@
           <p class="text-sm text-slate-500 leading-relaxed px-2">{{ toast.message }}</p>
         </div>
 
-        <!-- Demo mode: the server has no email provider, so it returned a direct verification
-             link. Surface it prominently instead of telling the user to check an inbox. -->
-        <a
-          v-if="verifyUrl"
-          :href="verifyUrl"
-          class="w-full bg-indigo-600 text-white font-semibold py-3 rounded-xl hover:bg-indigo-700 shadow-sm transition-all"
-        >
-          Verify my email now
-        </a>
-
         <div class="w-full text-xs text-slate-400 bg-slate-50 py-2.5 rounded-xl font-medium">
           <template v-if="toast.isError">Please resolve the error to try again.</template>
-          <template v-else-if="verifyUrl">Email delivery isn't configured on this demo — use the button above to activate your account.</template>
-          <template v-else>Redirecting to login portal shortly...</template>
+          <template v-else>Taking you to the verification screen…</template>
         </div>
-
-        <router-link v-if="verifyUrl" to="/login" class="text-xs font-semibold text-slate-500 hover:text-slate-700">
-          I'll verify later — back to sign in
-        </router-link>
       </div>
     </div>
   </Transition>
@@ -117,8 +102,6 @@ const turnstileToken = ref('')
 const name = ref('')
 const email = ref('')
 const password = ref('')
-// Set only when the server has no email provider (demo mode) and returns a direct link.
-const verifyUrl = ref('')
 
 const toast = reactive({
   show: false,
@@ -140,22 +123,19 @@ const handleRegister = async () => {
       })
     })
 
-    verifyUrl.value = data?.verificationUrl || ''
     toast.isError = false
+    toast.title = 'Account Created'
+    toast.message = `We've sent a 6-digit code to ${email.value}. Enter it to verify your account.`
     toast.show = true
 
-    if (verifyUrl.value) {
-      // No email was sent — keep the panel open with the direct verification button.
-      toast.title = 'Account Created'
-      toast.message = 'Your account is ready. Confirm your email address to activate it.'
-    } else {
-      toast.title = 'Verify Your Email'
-      toast.message = `We have sent a verification link to ${email.value}. Please confirm it to activate your account.`
-      setTimeout(() => {
-        toast.show = false
-        router.push('/login')
-      }, 5000)
-    }
+    // Go to the verify screen. In demo mode (no email provider) the server returns devOtp so
+    // the code input can be pre-filled without a real inbox.
+    const query = { email: email.value }
+    if (data?.devOtp) query.code = data.devOtp
+    setTimeout(() => {
+      toast.show = false
+      router.push({ path: '/verify-email', query })
+    }, 1500)
 
   } catch (error) {
     console.error('Registration error:', error)
