@@ -61,6 +61,7 @@ import {
 import { scheduleCleanup } from './cleanup.js';
 import { verifyTurnstile } from './turnstile.js';
 import { generateTotpSecret, verifyTotp, otpauthURL } from './totp.js';
+import { buildCheckoutSessionForm, createCheckoutSession } from './stripe.js';
 
 dotenv.config();
 
@@ -1164,16 +1165,40 @@ async function createCheckout(req, res) {
      VALUES (?, ?, ?, ?, 'SGD', 'Pending')`,
     [req.user.user_id, consultationId, reference, amountCents]
   );
-  await writeAudit(req, { actorId: req.user.user_id, action: 'CREATE_CHECKOUT', resourceType: 'PAYMENT', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { amountCents, consultationFeeCents, medicationCents, consultationId } });
+  const paymentId = result.insertId;
+
+  // With a Stripe TEST key, create a real hosted Checkout Session (test cards, no real charge);
+  // otherwise return a local stub URL so the demo still works without keys. The amount is always
+  // the server-computed value — never trusted from the client.
+  let checkoutUrl = `https://checkout.stripe.com/c/pay/${reference}`;
+  let provider = 'demo';
+  if (config.stripeSecretKey) {
+    try {
+      const form = buildCheckoutSessionForm({
+        amountCents, currency: 'sgd', paymentId, reference,
+        successUrl: config.stripeSuccessUrl, cancelUrl: config.stripeCancelUrl,
+      });
+      const session = await createCheckoutSession(config.stripeSecretKey, form);
+      checkoutUrl = session.url;
+      provider = 'stripe';
+    } catch (err) {
+      console.error(`[stripe] checkout session creation failed: ${err.message}`);
+      await writeAudit(req, { actorId: req.user.user_id, action: 'CREATE_CHECKOUT', resourceType: 'PAYMENT', resourceId: String(paymentId), outcome: 'FAILURE', metadata: { reason: 'stripe_error' } });
+      return res.status(502).json({ status: 'error', message: 'Payment provider is unavailable. Please try again shortly.' });
+    }
+  }
+
+  await writeAudit(req, { actorId: req.user.user_id, action: 'CREATE_CHECKOUT', resourceType: 'PAYMENT', resourceId: String(paymentId), outcome: 'SUCCESS', metadata: { amountCents, consultationFeeCents, medicationCents, consultationId, provider } });
   res.status(201).json({
-    paymentId: result.insertId,
+    paymentId,
     checkoutReference: reference,
     amountCents,
     consultationFeeCents,
     medicationCents,
     currency: 'SGD',
     status: 'Pending',
-    checkoutUrl: `https://checkout.stripe.com/c/pay/${reference}`,
+    provider,
+    checkoutUrl,
   });
 }
 
