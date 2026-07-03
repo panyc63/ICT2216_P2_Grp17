@@ -43,12 +43,8 @@ Caddy obtains a TLS certificate automatically on first request to your domain.
 ```bash
 curl -s https://<domain>/api/health        # -> {"status":"ok"}
 ```
-Open `https://<domain>/` in a browser. Seed accounts (`admin@mediflow.com`, `doctor@mediflow.com`,
-`nurse@mediflow.com`, `pharmacy@mediflow.com`, and the `john@gmail.com` / `jane@gmail.com` patients)
-are created by `setup.sql` with **unique per-account passwords that are deliberately NOT stored in
-this repository** — obtain them from the team. Before exposing the site publicly, change these
-passwords and enrol an authenticator app on the staff accounts (TOTP is enforced at login once
-enrolled).
+Open `https://<domain>/` in a browser. Seed logins (from `setup.sql`) use password
+**`Password123!`** — e.g. `admin@mediflow.com`, `doctor@mediflow.com`, `john@gmail.com`.
 
 ## Operations
 ```bash

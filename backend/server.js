@@ -61,7 +61,6 @@ import {
 import { scheduleCleanup } from './cleanup.js';
 import { verifyTurnstile } from './turnstile.js';
 import { generateTotpSecret, verifyTotp, otpauthURL } from './totp.js';
-import { buildCheckoutSessionForm, createCheckoutSession } from './stripe.js';
 
 dotenv.config();
 
@@ -159,11 +158,9 @@ app.get('/api/csrf', (req, res) => {
 app.use(csrfGuard(config));
 
 app.post('/api/register', registerLimit, asyncHandler(requireTurnstile), asyncHandler(registerPatient));
-app.post('/api/verify-email', tokenLimit, asyncHandler(verifyEmailOtp));
-app.post('/api/verify-email/resend', resetLimit, asyncHandler(resendVerification));
+app.get('/api/verify-email/:token', tokenLimit, asyncHandler(verifyEmail));
 app.post('/api/login', cryptoLimit, asyncHandler(requireTurnstile), asyncHandler(login));
 app.post('/api/login/mfa', cryptoLimit, asyncHandler(completeLoginMfa));
-app.post('/api/login/totp', cryptoLimit, asyncHandler(completeLoginTotp));
 app.post('/api/logout', asyncHandler(authenticate), asyncHandler(logout));
 app.get('/api/me', asyncHandler(authenticate), asyncHandler(me));
 app.post('/api/auth/reauth', cryptoLimit, asyncHandler(authenticate), asyncHandler(reauthenticate));
@@ -214,7 +211,6 @@ app.get('/api/medical-certificates/:id', asyncHandler(authenticate), asyncHandle
 app.get('/api/patient/medical-certificates/latest', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(getLatestPatientMedicalCertificate));
 app.post('/api/medical-certificates/:id/revoke', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), requireRecentReauth, asyncHandler(revokeMedicalCertificate));
 app.get('/api/verify/mc/:token', verificationLimit, asyncHandler(verifyMedicalCertificate));
-app.get('/api/verify/mc-id/:mcId', verificationLimit, asyncHandler(verifyMedicalCertificateById));
 
 // Authenticator-app TOTP (RFC 6238) — MFA step-up for privileged accounts (Admin/Doctor).
 // Verify paths are rate-limited to blunt online guessing of the 6-digit code.
@@ -468,17 +464,23 @@ async function registerPatient(req, res) {
   }
 
   const userId = await nextUserId();
-  const otp = generateEmailOtp();
+  const verificationToken = randomToken();
+  const verificationHash = hashToken(verificationToken);
   const passwordHash = await hashPassword(password);
-  // Store the OTP hash + a 15-minute expiry in the existing verification columns (no migration).
   await execute(
     `INSERT INTO users
      (user_id, name, email, password_hash, role, is_verified, status, email_verification_hash, email_verification_expires_at)
-     VALUES (?, ?, ?, ?, 'Patient', FALSE, 'PendingVerification', ?, DATE_ADD(NOW(), INTERVAL 15 MINUTE))`,
-    [userId, name, email, passwordHash, hashToken(otp)]
+     VALUES (?, ?, ?, ?, 'Patient', FALSE, 'PendingVerification', ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
+    [userId, name, email, passwordHash, verificationHash]
   );
 
-  const mailResult = await sendVerificationOtp(email, otp);
+  const verificationUrl = `${config.backendPublicUrl}/api/verify-email/${verificationToken}`;
+  const mailResult = await sendMail({
+    to: email,
+    subject: 'Verify your MediFlow account',
+    html: `<p>Welcome to MediFlow.</p><p>Verify your account: <a href="${verificationUrl}">Verify email</a></p>`,
+  });
+
   await writeAudit(req, {
     actorId: userId,
     action: 'REGISTER_PATIENT',
@@ -489,90 +491,56 @@ async function registerPatient(req, res) {
   });
 
   const responseBody = {
-    message: 'Account created. Enter the 6-digit code we emailed you to verify your address.',
+    message: 'User registered successfully. Please verify your email address.',
     user: { user_id: userId, role: 'Patient', status: 'PendingVerification' },
   };
-  // If the email was not delivered, log the code so an operator can recover it. Only surface it
-  // in the RESPONSE when NO provider is configured at all (skipped => demo mode). A configured-
-  // but-failing provider must NOT hand the code back to the caller, or an attacker could verify
-  // an email they do not own during a provider outage.
-  if (mailResult.skipped || mailResult.delivered === false) {
-    console.info(`[email] verification code for ${email} (email not delivered): ${otp}`);
-  }
+  // Demo / self-hosted recovery: ONLY when no email provider is configured (sendMail was
+  // skipped) do we surface the verification link so the account can still be activated. We
+  // log it for the operator AND return it in the response. This is gated to the no-email
+  // case: once a real RESEND_API_KEY is set, verification tokens are NEVER leaked in the API
+  // response or logs.
   if (mailResult.skipped) {
-    responseBody.devOtp = otp;
+    console.info(`[email] account-verification link (demo mode) for ${email}: ${verificationUrl}`);
+    responseBody.verificationUrl = verificationUrl;
   }
 
   res.status(201).json(responseBody);
 }
 
-// 6-digit numeric email-verification code.
-function generateEmailOtp() {
-  return String(crypto.randomInt(100000, 1000000));
-}
-
-async function sendVerificationOtp(email, otp) {
-  return sendMail({
-    to: email,
-    subject: 'Your MediFlow verification code',
-    html: `<p>Your MediFlow verification code is <strong>${otp}</strong>.</p><p>It expires in 15 minutes. If you did not sign up, you can ignore this email.</p>`,
-    text: `Your MediFlow verification code is ${otp}. It expires in 15 minutes.`,
-  });
-}
-
-// Verify a registration by 6-digit code (replaces the old click-link flow).
-async function verifyEmailOtp(req, res) {
-  const email = assertEmail(req.body.email);
-  const code = assertString(req.body.code, 'code', { min: 6, max: 6, pattern: /^\d{6}$/ });
+async function verifyEmail(req, res) {
+  const verificationHash = hashToken(req.params.token);
   const rows = await query(
     `SELECT user_id FROM users
-     WHERE email = ? AND email_verification_hash = ? AND email_verification_expires_at > NOW()
-       AND status = 'PendingVerification'
+     WHERE email_verification_hash = ? AND email_verification_expires_at > NOW() AND status = 'PendingVerification'
      LIMIT 1`,
-    [email, hashToken(code)]
+    [verificationHash]
   );
   if (!rows[0]) {
-    await writeAudit(req, { action: 'VERIFY_EMAIL', resourceType: 'USER', outcome: 'FAILURE', metadata: { email } });
-    return res.status(400).json({ error: 'That code is incorrect or has expired.' });
+    return res.status(404).send('<h1>Verification Failed</h1><p>The link is invalid or expired.</p>');
   }
+
   await execute(
     `UPDATE users
      SET is_verified = TRUE, status = 'Active', email_verification_hash = NULL, email_verification_expires_at = NULL
      WHERE user_id = ?`,
     [rows[0].user_id]
   );
-  await writeAudit(req, { actorId: rows[0].user_id, action: 'VERIFY_EMAIL', resourceType: 'USER', resourceId: rows[0].user_id, outcome: 'SUCCESS' });
-  res.status(200).json({ message: 'Email verified. You can now sign in.' });
-}
+  await writeAudit(req, {
+    actorId: rows[0].user_id,
+    action: 'VERIFY_EMAIL',
+    resourceType: 'USER',
+    resourceId: rows[0].user_id,
+    outcome: 'SUCCESS',
+  });
 
-// Reissue a verification code. Anti-enumeration: always 200; abuse is throttled by the route's
-// rate limiter (a short client-side cooldown is enforced by the UI).
-async function resendVerification(req, res) {
-  const email = assertEmail(req.body.email);
-  const user = await getUserByEmail(email);
-  const generic = { message: 'If your account is pending verification, a new code has been sent.' };
-  if (!user || user.status !== 'PendingVerification') {
-    return res.status(200).json(generic);
-  }
-  const otp = generateEmailOtp();
-  await execute(
-    `UPDATE users SET email_verification_hash = ?, email_verification_expires_at = DATE_ADD(NOW(), INTERVAL 15 MINUTE) WHERE user_id = ?`,
-    [hashToken(otp), user.user_id]
-  );
-  const mailResult = await sendVerificationOtp(email, otp);
-  await writeAudit(req, { actorId: user.user_id, action: 'RESEND_VERIFICATION', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
-  if (mailResult.skipped || mailResult.delivered === false) {
-    console.info(`[email] resent verification code for ${email} (email not delivered): ${otp}`);
-  }
-  // Only the true no-provider demo mode surfaces the code (never a delivery failure).
-  if (mailResult.skipped) {
-    return res.status(200).json({ ...generic, devOtp: otp });
-  }
-  res.status(200).json(generic);
+  res.send(`
+    <div style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+      <h1 style="color: #4f46e5;">Email Verified Successfully</h1>
+      <p>Your MediFlow account is active.</p>
+      <a href="${config.frontendUrl}/login" style="background: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px; font-weight: bold;">Go to Login</a>
+    </div>
+  `);
 }
-
-const MAX_FAILED_LOGINS = 5;
-const LOCKOUT_MINUTES = 15;
 
 async function login(req, res) {
   const email = assertEmail(req.body.email);
@@ -584,28 +552,10 @@ async function login(req, res) {
     return res.status(401).json({ error: 'Invalid email or password credentials.' });
   }
 
-  // Account-level lockout: an active lock rejects even a correct password, so a distributed
-  // (IP-rotating) attacker cannot bypass throttling by moving IPs (complements the per-IP limiter).
-  if (user.locked_until && new Date(user.locked_until) > new Date()) {
-    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE', metadata: { reason: 'locked' } });
-    return res.status(429).json({ error: 'Account temporarily locked after repeated failed attempts. Please try again later.' });
-  }
-
   const passwordMatches = await verifyPassword(password, user.password_hash);
   if (!passwordMatches) {
-    const failures = Number(user.failed_login_count || 0) + 1;
-    if (failures >= MAX_FAILED_LOGINS) {
-      await execute('UPDATE users SET failed_login_count = ?, locked_until = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE user_id = ?', [failures, LOCKOUT_MINUTES, user.user_id]);
-    } else {
-      await execute('UPDATE users SET failed_login_count = ? WHERE user_id = ?', [failures, user.user_id]);
-    }
-    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE', metadata: { reason: failures >= MAX_FAILED_LOGINS ? 'locked' : 'bad_password' } });
+    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE', metadata: { reason: 'bad_password' } });
     return res.status(401).json({ error: 'Invalid email or password credentials.' });
-  }
-
-  // Correct password: clear any accumulated failure/lock state.
-  if (Number(user.failed_login_count || 0) > 0 || user.locked_until) {
-    await execute('UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE user_id = ?', [user.user_id]);
   }
 
   if (!isPasswordHash(user.password_hash)) {
@@ -615,21 +565,6 @@ async function login(req, res) {
   if (!user.is_verified || user.status !== 'Active') {
     await writeAudit(req, { actorId: user.user_id, action: 'LOGIN', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE', metadata: { reason: 'unverified' } });
     return res.status(403).json({ error: 'Please verify your email address before signing in.' });
-  }
-
-  // Second factor. Prefer an enrolled authenticator app (TOTP — offline, phishing-resistant, no
-  // email dependency); otherwise fall back to email-OTP MFA when the role requires it. A random
-  // challengeId (stored with a 5-min expiry) proves the password step passed without re-sending
-  // the password to the TOTP step.
-  if (user.totp_enabled) {
-    const challengeId = randomToken(16);
-    await execute('UPDATE users SET mfa_challenge_id = ?, mfa_otp_hash = NULL, mfa_expires_at = DATE_ADD(NOW(), INTERVAL 5 MINUTE) WHERE user_id = ?', [challengeId, user.user_id]);
-    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN_TOTP_CHALLENGE', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
-    return res.status(202).json({
-      requiresTotp: true,
-      challengeId,
-      message: 'Enter the 6-digit code from your authenticator app.',
-    });
   }
 
   if (config.mfaRequiredRoles.includes(user.role)) {
@@ -647,35 +582,9 @@ async function login(req, res) {
   res.status(200).json({ message: 'Login successful.', ...issueSession(req, res, user) });
 }
 
-// Second step of a TOTP-protected login: verify the authenticator code against the challenge
-// created by login() (which required a correct password first).
-async function completeLoginTotp(req, res) {
-  const email = assertEmail(req.body.email);
-  const challengeId = assertString(req.body.challengeId, 'challengeId', { min: 10, max: 128 });
-  const code = assertString(req.body.code, 'code', { min: 6, max: 6, pattern: /^\d{6}$/ });
-  const user = await getUserByEmail(email);
-  if (!user || !user.totp_enabled || user.mfa_challenge_id !== challengeId) {
-    await writeAudit(req, { action: 'LOGIN_TOTP', resourceType: 'USER', outcome: 'FAILURE', metadata: { email } });
-    return res.status(401).json({ error: 'Invalid authenticator code.' });
-  }
-  const rows = await query('SELECT mfa_expires_at > NOW() AS valid, totp_secret_encrypted FROM users WHERE user_id = ?', [user.user_id]);
-  if (!rows[0]?.valid) {
-    return res.status(401).json({ error: 'This sign-in attempt expired. Please start again.' });
-  }
-  const secret = decryptText(rows[0].totp_secret_encrypted, config);
-  if (!secret || !verifyTotp(code, secret)) {
-    await writeAudit(req, { actorId: user.user_id, action: 'LOGIN_TOTP', resourceType: 'USER', resourceId: user.user_id, outcome: 'FAILURE' });
-    return res.status(401).json({ error: 'Invalid authenticator code.' });
-  }
-  await execute('UPDATE users SET mfa_challenge_id = NULL, mfa_expires_at = NULL, last_login = CURRENT_TIMESTAMP WHERE user_id = ?', [user.user_id]);
-  await writeAudit(req, { actorId: user.user_id, action: 'LOGIN_TOTP', resourceType: 'USER', resourceId: user.user_id, outcome: 'SUCCESS' });
-  const now = currentUnixSeconds();
-  res.status(200).json({ message: 'Login successful.', ...issueSession(req, res, user, { mfa_at: now, reauth_at: now }) });
-}
-
 async function createMfaChallenge(user, subject) {
   const challengeId = randomToken(16);
-  const otp = String(crypto.randomInt(100000, 1000000));
+  const otp = String(Math.floor(100000 + Math.random() * 900000));
   await execute(
     `UPDATE users
      SET mfa_challenge_id = ?, mfa_otp_hash = ?, mfa_expires_at = DATE_ADD(NOW(), INTERVAL 5 MINUTE)
@@ -1255,40 +1164,16 @@ async function createCheckout(req, res) {
      VALUES (?, ?, ?, ?, 'SGD', 'Pending')`,
     [req.user.user_id, consultationId, reference, amountCents]
   );
-  const paymentId = result.insertId;
-
-  // With a Stripe TEST key, create a real hosted Checkout Session (test cards, no real charge);
-  // otherwise return a local stub URL so the demo still works without keys. The amount is always
-  // the server-computed value — never trusted from the client.
-  let checkoutUrl = `https://checkout.stripe.com/c/pay/${reference}`;
-  let provider = 'demo';
-  if (config.stripeSecretKey) {
-    try {
-      const form = buildCheckoutSessionForm({
-        amountCents, currency: 'sgd', paymentId, reference,
-        successUrl: config.stripeSuccessUrl, cancelUrl: config.stripeCancelUrl,
-      });
-      const session = await createCheckoutSession(config.stripeSecretKey, form);
-      checkoutUrl = session.url;
-      provider = 'stripe';
-    } catch (err) {
-      console.error(`[stripe] checkout session creation failed: ${err.message}`);
-      await writeAudit(req, { actorId: req.user.user_id, action: 'CREATE_CHECKOUT', resourceType: 'PAYMENT', resourceId: String(paymentId), outcome: 'FAILURE', metadata: { reason: 'stripe_error' } });
-      return res.status(502).json({ status: 'error', message: 'Payment provider is unavailable. Please try again shortly.' });
-    }
-  }
-
-  await writeAudit(req, { actorId: req.user.user_id, action: 'CREATE_CHECKOUT', resourceType: 'PAYMENT', resourceId: String(paymentId), outcome: 'SUCCESS', metadata: { amountCents, consultationFeeCents, medicationCents, consultationId, provider } });
+  await writeAudit(req, { actorId: req.user.user_id, action: 'CREATE_CHECKOUT', resourceType: 'PAYMENT', resourceId: String(result.insertId), outcome: 'SUCCESS', metadata: { amountCents, consultationFeeCents, medicationCents, consultationId } });
   res.status(201).json({
-    paymentId,
+    paymentId: result.insertId,
     checkoutReference: reference,
     amountCents,
     consultationFeeCents,
     medicationCents,
     currency: 'SGD',
     status: 'Pending',
-    provider,
-    checkoutUrl,
+    checkoutUrl: `https://checkout.stripe.com/c/pay/${reference}`,
   });
 }
 
@@ -1514,13 +1399,6 @@ async function getPrescription(req, res) {
   res.status(200).json(prescription);
 }
 
-// Short, public verification URL keyed by MC id (opens the /verify-mc page, which calls
-// GET /api/verify/mc-id/:mcId). Short enough to fit a low-density, reliably-scannable QR; the
-// signed token itself stays server-side and is re-verified on lookup.
-function mcVerifyUrl(mcId) {
-  return `${config.frontendUrl}/verify-mc?mc=${encodeURIComponent(mcId)}`;
-}
-
 async function createMedicalCertificate(req, res) {
   const consultationId = assertString(req.body.consultationId, 'consultationId', { min: 4, max: 36 });
   const patientId = assertString(req.body.patientId, 'patientId', { min: 4, max: 36 });
@@ -1547,12 +1425,12 @@ async function createMedicalCertificate(req, res) {
   const token = signMcTokenAsym({ mc_id: mcId, patient_id: patientId, doctor_id: req.user.user_id, issue_date: new Date().toISOString().slice(0, 10) }, privateKeyPem);
   await execute(
     `INSERT INTO medical_certificates
-     (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, diagnosis_encrypted, qr_token_hash, signature_hash, verification_token, is_revoked)
-     VALUES (?, ?, ?, ?, CURRENT_DATE, ?, ?, ?, ?, ?, FALSE)`,
-    [mcId, consultationId, req.user.user_id, patientId, validUntil, encryptText(diagnosis, config), hashToken(token), sha256(token), token]
+     (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, diagnosis_encrypted, qr_token_hash, signature_hash, is_revoked)
+     VALUES (?, ?, ?, ?, CURRENT_DATE, ?, ?, ?, ?, FALSE)`,
+    [mcId, consultationId, req.user.user_id, patientId, validUntil, encryptText(diagnosis, config), hashToken(token), sha256(token)]
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'ISSUE_MC', resourceType: 'MEDICAL_CERTIFICATE', resourceId: mcId, outcome: 'SUCCESS', metadata: { consultationId, patientId } });
-  res.status(201).json({ mcId, verificationToken: token, verifyUrl: mcVerifyUrl(mcId), status: 'Issued' });
+  res.status(201).json({ mcId, verificationToken: token, status: 'Issued' });
 }
 
 async function getMedicalCertificate(req, res) {
@@ -1565,9 +1443,6 @@ async function getMedicalCertificate(req, res) {
   delete mc.diagnosis_encrypted;
   delete mc.qr_token_hash;
   delete mc.signature_hash;
-  // The signed token stays server-side; expose only a short verify URL for the QR/link.
-  delete mc.verification_token;
-  mc.verifyUrl = mcVerifyUrl(mc.mc_id);
   await writeAudit(req, { actorId: req.user.user_id, action: 'READ_MC', resourceType: 'MEDICAL_CERTIFICATE', resourceId: mcId, outcome: 'SUCCESS' });
   res.status(200).json(mc);
 }
@@ -1588,8 +1463,6 @@ async function getLatestPatientMedicalCertificate(req, res) {
   delete rows[0].diagnosis_encrypted;
   delete rows[0].qr_token_hash;
   delete rows[0].signature_hash;
-  delete rows[0].verification_token;
-  rows[0].verifyUrl = mcVerifyUrl(rows[0].mc_id);
   res.status(200).json(rows[0]);
 }
 
@@ -1633,34 +1506,6 @@ async function verifyMedicalCertificate(req, res) {
   }
   res.status(200).json({
     valid: !mc.is_revoked,
-    mcId: mc.mc_id,
-    issueDate: mc.issue_date,
-    validUntil: mc.valid_until,
-    revoked: Boolean(mc.is_revoked),
-  });
-}
-
-// Public verification by MC id (what the QR / short verify URL uses): loads the stored signed
-// token, re-verifies its Ed25519 signature against the issuing doctor's public key, and reports
-// status — no PHI, same crypto guarantee as the by-token path.
-async function verifyMedicalCertificateById(req, res) {
-  const mcId = assertString(req.params.mcId, 'mc id', { min: 4, max: 60 });
-  const rows = await query(
-    `SELECT mc.mc_id, mc.issue_date, mc.valid_until, mc.is_revoked, mc.verification_token, u.mc_public_key
-     FROM medical_certificates mc JOIN users u ON u.user_id = mc.doctor_id
-     WHERE mc.mc_id = ? LIMIT 1`,
-    [mcId]
-  );
-  const mc = rows[0];
-  if (!mc || !mc.verification_token || !mc.mc_public_key) return res.status(404).json({ valid: false });
-  try {
-    verifyMcTokenAsym(mc.verification_token, mc.mc_public_key);
-  } catch {
-    return res.status(400).json({ valid: false });
-  }
-  res.status(200).json({
-    valid: !mc.is_revoked,
-    mcId: mc.mc_id,
     issueDate: mc.issue_date,
     validUntil: mc.valid_until,
     revoked: Boolean(mc.is_revoked),

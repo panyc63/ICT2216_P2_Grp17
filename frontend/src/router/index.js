@@ -2,8 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Home from '../views/Home.vue'
 import Login from '../views/login.vue'
 import Register from '../views/register.vue'
-import VerifyEmail from '../views/VerifyEmail.vue'
-import VerifyCertificate from '../views/VerifyCertificate.vue'
 import ForgetPassword from '../views/forgetPassword.vue'
 import ResetPassword from '../views/resetPassword.vue'
 import AboutUs from '../views/aboutUs.vue'
@@ -35,8 +33,6 @@ const routes = [
   { path: '/', name: 'Home', component: Home },
   { path: '/login', name: 'Login', component: Login },
   { path: '/register', name: 'Register', component: Register },
-  { path: '/verify-email', name: 'VerifyEmail', component: VerifyEmail },
-  { path: '/verify-mc', name: 'VerifyCertificate', component: VerifyCertificate },
   { path: '/forget-password', name: 'ForgetPassword', component: ForgetPassword },
   { path: '/reset-password', name: 'ResetPassword', component: ResetPassword },
   { path: '/about', name: 'AboutUs', component: AboutUs },
