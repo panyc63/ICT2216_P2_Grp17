@@ -511,8 +511,10 @@ test('MC is signed with the doctor key and publicly verifiable; tamper fails', a
     body: { consultationId: 'MH-C001', patientId: 'MH-U006', diagnosis: 'Acute viral pharyngitis', validUntil: '2030-01-01' },
   });
   assert.equal(issued.status, 201);
-  const { verificationToken } = await issued.json();
+  const created = await issued.json();
+  const { verificationToken, mcId, verifyUrl } = created;
   assert.ok(verificationToken && verificationToken.includes('.'));
+  assert.ok(verifyUrl && verifyUrl.includes(`/verify-mc?mc=${encodeURIComponent(mcId)}`));
 
   // Public QR verification succeeds and returns only minimal, non-PHI fields.
   const ok = await api(`/api/verify/mc/${verificationToken}`);
@@ -521,9 +523,23 @@ test('MC is signed with the doctor key and publicly verifiable; tamper fails', a
   assert.equal(body.valid, true);
   assert.equal('diagnosis' in body, false);
 
+  // The signed token is persisted, and the short mcId path (what the QR uses) verifies too.
+  const [tokRows] = await db.execute('SELECT verification_token FROM medical_certificates WHERE mc_id = ?', [mcId]);
+  assert.equal(tokRows[0].verification_token, verificationToken);
+  const byId = await api(`/api/verify/mc-id/${encodeURIComponent(mcId)}`);
+  assert.equal(byId.status, 200);
+  assert.equal((await byId.json()).valid, true);
+
   // A tampered token must fail (different hash -> no match, or bad signature).
   const tampered = await api(`/api/verify/mc/${verificationToken}x`);
   assert.ok([400, 404].includes(tampered.status));
+
+  // After revocation, both verify paths report revoked / not valid.
+  await api(`/api/medical-certificates/${mcId}/revoke`, { method: 'POST', session: doctor, csrf });
+  const afterId = await api(`/api/verify/mc-id/${encodeURIComponent(mcId)}`);
+  const afterBody = await afterId.json();
+  assert.equal(afterBody.valid, false);
+  assert.equal(afterBody.revoked, true);
 
   // The doctor now has a stored public key (private key is encrypted at rest).
   const [rows] = await db.execute('SELECT mc_public_key, mc_private_key_encrypted FROM users WHERE user_id = ?', [SEED_DOCTOR.user_id]);

@@ -156,6 +156,9 @@ CREATE TABLE medical_certificates (
     diagnosis_encrypted TEXT NULL,
     qr_token_hash VARCHAR(64) NULL UNIQUE,
     signature_hash VARCHAR(64) NULL,
+    -- The full signed verification token (a public, Ed25519-signed credential — not a secret).
+    -- Persisted so the certificate owner's PDF/QR can carry it for third-party verification.
+    verification_token TEXT NULL,
     is_revoked BOOLEAN DEFAULT FALSE,
     revoked_at TIMESTAMP NULL DEFAULT NULL,
     FOREIGN KEY (consultation_id) REFERENCES consultations(consultation_id) ON DELETE RESTRICT,

@@ -214,6 +214,7 @@ app.get('/api/medical-certificates/:id', asyncHandler(authenticate), asyncHandle
 app.get('/api/patient/medical-certificates/latest', asyncHandler(authenticate), requireRole('Patient'), asyncHandler(getLatestPatientMedicalCertificate));
 app.post('/api/medical-certificates/:id/revoke', asyncHandler(authenticate), requireRole('Doctor', 'Admin'), requireRecentReauth, asyncHandler(revokeMedicalCertificate));
 app.get('/api/verify/mc/:token', verificationLimit, asyncHandler(verifyMedicalCertificate));
+app.get('/api/verify/mc-id/:mcId', verificationLimit, asyncHandler(verifyMedicalCertificateById));
 
 // Authenticator-app TOTP (RFC 6238) — MFA step-up for privileged accounts (Admin/Doctor).
 // Verify paths are rate-limited to blunt online guessing of the 6-digit code.
@@ -1513,6 +1514,13 @@ async function getPrescription(req, res) {
   res.status(200).json(prescription);
 }
 
+// Short, public verification URL keyed by MC id (opens the /verify-mc page, which calls
+// GET /api/verify/mc-id/:mcId). Short enough to fit a low-density, reliably-scannable QR; the
+// signed token itself stays server-side and is re-verified on lookup.
+function mcVerifyUrl(mcId) {
+  return `${config.frontendUrl}/verify-mc?mc=${encodeURIComponent(mcId)}`;
+}
+
 async function createMedicalCertificate(req, res) {
   const consultationId = assertString(req.body.consultationId, 'consultationId', { min: 4, max: 36 });
   const patientId = assertString(req.body.patientId, 'patientId', { min: 4, max: 36 });
@@ -1539,12 +1547,12 @@ async function createMedicalCertificate(req, res) {
   const token = signMcTokenAsym({ mc_id: mcId, patient_id: patientId, doctor_id: req.user.user_id, issue_date: new Date().toISOString().slice(0, 10) }, privateKeyPem);
   await execute(
     `INSERT INTO medical_certificates
-     (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, diagnosis_encrypted, qr_token_hash, signature_hash, is_revoked)
-     VALUES (?, ?, ?, ?, CURRENT_DATE, ?, ?, ?, ?, FALSE)`,
-    [mcId, consultationId, req.user.user_id, patientId, validUntil, encryptText(diagnosis, config), hashToken(token), sha256(token)]
+     (mc_id, consultation_id, doctor_id, patient_id, issue_date, valid_until, diagnosis_encrypted, qr_token_hash, signature_hash, verification_token, is_revoked)
+     VALUES (?, ?, ?, ?, CURRENT_DATE, ?, ?, ?, ?, ?, FALSE)`,
+    [mcId, consultationId, req.user.user_id, patientId, validUntil, encryptText(diagnosis, config), hashToken(token), sha256(token), token]
   );
   await writeAudit(req, { actorId: req.user.user_id, action: 'ISSUE_MC', resourceType: 'MEDICAL_CERTIFICATE', resourceId: mcId, outcome: 'SUCCESS', metadata: { consultationId, patientId } });
-  res.status(201).json({ mcId, verificationToken: token, status: 'Issued' });
+  res.status(201).json({ mcId, verificationToken: token, verifyUrl: mcVerifyUrl(mcId), status: 'Issued' });
 }
 
 async function getMedicalCertificate(req, res) {
@@ -1557,6 +1565,9 @@ async function getMedicalCertificate(req, res) {
   delete mc.diagnosis_encrypted;
   delete mc.qr_token_hash;
   delete mc.signature_hash;
+  // The signed token stays server-side; expose only a short verify URL for the QR/link.
+  delete mc.verification_token;
+  mc.verifyUrl = mcVerifyUrl(mc.mc_id);
   await writeAudit(req, { actorId: req.user.user_id, action: 'READ_MC', resourceType: 'MEDICAL_CERTIFICATE', resourceId: mcId, outcome: 'SUCCESS' });
   res.status(200).json(mc);
 }
@@ -1577,6 +1588,8 @@ async function getLatestPatientMedicalCertificate(req, res) {
   delete rows[0].diagnosis_encrypted;
   delete rows[0].qr_token_hash;
   delete rows[0].signature_hash;
+  delete rows[0].verification_token;
+  rows[0].verifyUrl = mcVerifyUrl(rows[0].mc_id);
   res.status(200).json(rows[0]);
 }
 
@@ -1620,6 +1633,34 @@ async function verifyMedicalCertificate(req, res) {
   }
   res.status(200).json({
     valid: !mc.is_revoked,
+    mcId: mc.mc_id,
+    issueDate: mc.issue_date,
+    validUntil: mc.valid_until,
+    revoked: Boolean(mc.is_revoked),
+  });
+}
+
+// Public verification by MC id (what the QR / short verify URL uses): loads the stored signed
+// token, re-verifies its Ed25519 signature against the issuing doctor's public key, and reports
+// status — no PHI, same crypto guarantee as the by-token path.
+async function verifyMedicalCertificateById(req, res) {
+  const mcId = assertString(req.params.mcId, 'mc id', { min: 4, max: 60 });
+  const rows = await query(
+    `SELECT mc.mc_id, mc.issue_date, mc.valid_until, mc.is_revoked, mc.verification_token, u.mc_public_key
+     FROM medical_certificates mc JOIN users u ON u.user_id = mc.doctor_id
+     WHERE mc.mc_id = ? LIMIT 1`,
+    [mcId]
+  );
+  const mc = rows[0];
+  if (!mc || !mc.verification_token || !mc.mc_public_key) return res.status(404).json({ valid: false });
+  try {
+    verifyMcTokenAsym(mc.verification_token, mc.mc_public_key);
+  } catch {
+    return res.status(400).json({ valid: false });
+  }
+  res.status(200).json({
+    valid: !mc.is_revoked,
+    mcId: mc.mc_id,
     issueDate: mc.issue_date,
     validUntil: mc.valid_until,
     revoked: Boolean(mc.is_revoked),

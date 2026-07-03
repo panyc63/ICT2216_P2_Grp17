@@ -58,9 +58,28 @@
           </div>
         </dl>
 
+        <!-- Verify authenticity: QR + short link a third party (e.g. employer) can check. -->
+        <div v-if="qr" class="mt-8 flex items-start gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <svg
+            :viewBox="`0 0 ${qr.size + 8} ${qr.size + 8}`" width="108" height="108"
+            shape-rendering="crispEdges" role="img" aria-label="Certificate verification QR code"
+            class="shrink-0 rounded-lg border border-slate-200 bg-white"
+          >
+            <rect :width="qr.size + 8" :height="qr.size + 8" fill="#ffffff" />
+            <g fill="#0f172a">
+              <rect v-for="(cell, i) in qrCells" :key="i" :x="cell.c + 4" :y="cell.r + 4" width="1" height="1" />
+            </g>
+          </svg>
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-slate-900">Verify authenticity</p>
+            <p class="text-xs text-slate-500 mt-0.5">Scan the QR, or open the link, to confirm this certificate is genuine and not revoked.</p>
+            <a :href="verifyUrl" target="_blank" rel="noopener noreferrer" class="mt-1.5 inline-block text-xs font-semibold text-indigo-600 hover:underline break-all">{{ verifyUrl }}</a>
+          </div>
+        </div>
+
         <button
           @click="downloadPdf"
-          class="mt-8 w-full inline-flex items-center justify-center gap-2 py-3 bg-indigo-600 text-white text-sm font-semibold rounded-xl shadow-sm hover:bg-indigo-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+          class="mt-6 w-full inline-flex items-center justify-center gap-2 py-3 bg-indigo-600 text-white text-sm font-semibold rounded-xl shadow-sm hover:bg-indigo-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
         >
           <span aria-hidden="true">⬇</span> Download PDF
         </button>
@@ -70,13 +89,24 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { jsPDF } from 'jspdf'
 import { apiFetch } from '../../services/api'
+import { qrMatrix } from '../../utils/qrcode'
 
 // Null until the backend confirms an issued certificate — no sample/seed data.
 const mc = ref(null)
 const loading = ref(true)
+const verifyUrl = ref('')
+
+// QR matrix for the short verify URL (rendered as inline SVG — no v-html).
+const qr = computed(() => (verifyUrl.value ? qrMatrix(verifyUrl.value) : null))
+const qrCells = computed(() => {
+  if (!qr.value) return []
+  const cells = []
+  qr.value.modules.forEach((row, r) => row.forEach((on, c) => { if (on) cells.push({ r, c }) }))
+  return cells
+})
 
 onMounted(async () => {
   try {
@@ -89,6 +119,7 @@ onMounted(async () => {
       validTo: String(data.valid_until || '').slice(0, 10),
       doctor: data.doctor_name || 'Attending doctor',
     }
+    verifyUrl.value = data.verifyUrl || ''
   } catch {
     mc.value = null // no certificate yet → empty state
   } finally {
@@ -132,6 +163,27 @@ const downloadPdf = () => {
   doc.text('for the validity period stated above.', 20, y + 6)
   doc.text('_____________________', 20, y + 30)
   doc.text(String(data.doctor), 20, y + 36)
+
+  // Verification QR (drawn as filled squares — no image dependency) + the short verify link.
+  if (qr.value && verifyUrl.value) {
+    const matrix = qr.value
+    const mod = 1.5
+    const qx = 140
+    const qy = y - 4
+    doc.setFillColor(15, 23, 42)
+    for (let r = 0; r < matrix.size; r += 1) {
+      for (let c = 0; c < matrix.size; c += 1) {
+        if (matrix.modules[r][c]) doc.rect(qx + c * mod, qy + r * mod, mod, mod, 'F')
+      }
+    }
+    doc.setFontSize(8)
+    doc.setTextColor(90)
+    doc.text('Scan to verify authenticity', qx, qy + matrix.size * mod + 5)
+    doc.text('Verify this certificate at:', 20, 280)
+    doc.setTextColor(60)
+    doc.text(verifyUrl.value, 20, 285, { maxWidth: 175 })
+    doc.setTextColor(0)
+  }
 
   doc.save(`Medical_Certificate_${String(data.patientName).replace(/\s+/g, '_')}.pdf`)
 }
