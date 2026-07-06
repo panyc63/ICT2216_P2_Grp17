@@ -17,6 +17,6 @@
     "eslint-plugin-vue": "^9.32.0",
     "globals": "^15.14.0",
     "js-yaml": "^4.1.0",
-    "vue-eslint-parser": "^9.4.3"
+    "vue-eslint-parser": "^10.4.1"
   }
 }
