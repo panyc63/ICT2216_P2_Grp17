@@ -14,7 +14,7 @@
     "dotenv": "^16.6.1",
     "express": "^4.22.2",
     "multer": "^2.2.0",
-    "mysql2": "^3.22.5",
-    "nodemailer": "^9.0.1"
+    "mysql2": "^3.22.6",
+    "nodemailer": "^9.0.3"
   }
 }
