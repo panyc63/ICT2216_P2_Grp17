@@ -13,8 +13,8 @@
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.2",
-    "multer": "^2.2.0",
-    "mysql2": "^3.22.5",
-    "nodemailer": "^9.0.1"
+    "multer": "^2.3.0",
+    "mysql2": "^3.24.3",
+    "nodemailer": "^9.1.1"
   }
 }
